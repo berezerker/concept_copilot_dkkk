@@ -1,0 +1,54 @@
+
+=== МАТРИЦА СОВМЕСТИМОСТИ ===
+
+## mango.xlsx · загрузка 3.6 с · движок libreoffice · метрика Чистый долг / EBITDA: Dashboard!33 «Чистый долг / EBITDA»
+  ✓ model_map                    0.1 с  {"листов": 22, "доля драйверов вне Inputs": [["Выручка", 0.023], ["EBITDA", 0.064], ["Чистая прибыль", 0.064]]}
+  ✓ audit_model                  0.0 с  {"Число вместо формулы в прогнозе": 1, "Формула отличается от соседних": 12, "Одна метрика — разные значения": 1, "Минимум/максимум по факту и прогнозу": 2}
+  ✓ explain_cell                 0.0 с  "Dashboard!L33 = =L30/L14 (2 слагаемых)"
+  ✓ find_drivers                 6.4 с  {"проверено": 40, "найдено": 5, "вне Inputs": 0, "топ-3": ["Inputs!225 Urals (Primorsk) FOB", "Inputs!194 Нефть марки Brent", "Inputs!42 Ключевая ставка средняя за пер"]}
+  ✓ run_stress (row)             0.5 с  [{"scenario": "-10%", "min": [2025, 2.1204], "max_abs_delta": 0.29087}]
+  ✓ run_stress (match: цена)     0.6 с  ["Assumptions!22 «Oil price» pct -15 за 2026–2030", "Oil flow!91 «Average gas price» pct -15 за 2026–2030", "Oil flow!98 «Price» pct -15 за 2026–2030"]
+  ✓ covenant_check               0.0 с  {"порог": "<= 3.1", "пробой": [], "мин. запас": {"year": 2026, "value": 2.8224, "headroom_pct": 8.96}}
+  ✓ headroom                     8.7 с  [{"driver": "Inputs!225", "change_pct": -11.7}, {"driver": "Inputs!194", "change_pct": 15.5}]
+  ✓ goal_seek                    2.8 с  {"converged": true, "value": -11.25, "metric_value": 3.0865, "message": null}
+  ✓ monte_carlo (n=40)          18.6 с  {"p5": 2.5008, "p50": 2.8193, "p95": 3.3277, "breach_probability": 0.075}
+
+## lavanda.xlsx · загрузка 6.5 с · движок libreoffice · метрика Чистый долг / EBITDA: Dashboard!47 «Net Debt / EBITDA "сквозной"»
+  ✓ model_map                    0.2 с  {"листов": 25, "доля драйверов вне Inputs": [["Выручка", 0.919], ["EBITDA", 0.957], ["Чистая прибыль", 0.958]]}
+  ✓ audit_model                  0.4 с  {"Ошибка в значениях": 3, "Число вместо формулы в прогнозе": 25, "Формула отличается от соседних": 25, "Минимум/максимум по факту и прогнозу": 3}
+  ✓ explain_cell                 0.0 с  "Dashboard!Q47 = =Model!Q538 (1 слагаемых)"
+  ✓ find_drivers                17.1 с  {"проверено": 40, "найдено": 5, "вне Inputs": 5, "топ-3": ["КРЭА_выручка_блоков!515 Ключевой уровень до стресса", "Dashboard!302 Цена на ЗОУ марки Н (природный", "Model!61 Нектарин"]}
+  ✓ run_stress (row)             0.4 с  [{"scenario": "-10%", "min": [2025, 4.5859], "max_abs_delta": 0.79758}]
+  ✓ run_stress (match: цена)     0.6 с  ["Dashboard!206 «Инфляция цен производителей (рубль)» pct -15 за 2026–2040", "Dashboard!290 «Прирост цен на э/э РСВ (1 ц.з.)» pct -15 за 2026–2040", "Dashboard!302 «Цена на ЗОУ марки Н (природный уран) Spot» pct -15 за 2026–2040"]
+  ✓ covenant_check               0.0 с  {"порог": "<= 7.41", "пробой": [], "мин. запас": {"year": 2033, "value": 6.7339, "headroom_pct": 9.12}}
+  ✓ headroom                     6.6 с  [{"driver": "КРЭА_выручка_блоков!515", "change_pct": -18.8}, {"driver": "Dashboard!302", "change_pct": -22.5}]
+  ✓ goal_seek                    3.1 с  {"converged": true, "value": -18.75, "metric_value": 7.4167, "message": null}
+  ✓ monte_carlo (n=40)          17.6 с  {"p5": 6.3165, "p50": 6.722, "p95": 7.4107, "breach_probability": 0.05}
+
+## sample.xlsx · загрузка 1.2 с · движок libreoffice · метрика Чистый долг / EBITDA: Calc!9 «Net Debt / EBITDA»
+  ✓ model_map                    0.0 с  {"листов": 2, "доля драйверов вне Inputs": [["Выручка", 0.0], ["EBITDA", 0.0], ["Долг", null]]}
+  ✓ audit_model                  0.0 с  {}
+  ✓ explain_cell                 0.0 с  "Calc!E9 = =E5/E4 (2 слагаемых)"
+  ✓ find_drivers                 0.1 с  {"проверено": 4, "найдено": 4, "вне Inputs": 1, "топ-3": ["Inputs!6 Себестоимость, доля выручки", "Inputs!3 Цена продукции", "Inputs!4 Объём продаж"]}
+  ✓ run_stress (row)             0.0 с  [{"scenario": "-10%", "min": [2030, 0.91694], "max_abs_delta": 0.098972}]
+  ✓ run_stress (match: цена)     0.0 с  ["Inputs!3 «Цена продукции» pct -15 за 2026–2030"]
+  ✓ covenant_check               0.0 с  {"порог": "<= 2.43", "пробой": [], "мин. запас": {"year": 2026, "value": 2.2119, "headroom_pct": 8.98}}
+  ✓ headroom                     0.5 с  [{"driver": "Inputs!6", "change_pct": 5.39}, {"driver": "Inputs!3", "change_pct": -8.91}]
+  ✓ goal_seek                    0.2 с  {"converged": true, "value": 5.625, "metric_value": 2.4354, "message": null}
+  ✓ monte_carlo (n=40)           1.1 с  {"p5": 1.7693, "p50": 2.2141, "p95": 2.9101, "breach_probability": 0.3}
+
+=== 2026-10-17 · кредитные инструменты (LibreOffice, без LLM) ===
+mango.xlsx (ND/EBITDA Dashboard!33):
+  ✓ lender_metrics   min DSCR 3,59 (2026), avg 6,43; долг почти не гасится в горизонте → LLCR занижен (предупреждение)
+  ✓ stress_pack      6 сценариев: пробой ND/EBITDA ≤ 3,1 в жёстких и комбинированных
+  ✓ safe_zone 4×4    37,5% сочетаний без пробоя
+  ✓ reverse_stress   пробой при совместном −8,6% Urals и курса (0,86σ)
+  ✓ industry_expert  офлайн-эвристика + стресс
+  ✓ КПКИ-сценарий    7 шагов за ~45–60 с, заключение + Word
+lavanda.xlsx (ND/EBITDA Dashboard!47):
+  ✓ lender_metrics   min DSCR 0,71 (2026)
+  ✓ stress_pack      пробой в «жёстком» по «Ключевой уровень до стресса» и в комбинированном
+  ✓ safe_zone 4×4    56% без пробоя
+  ✓ reverse_stress   пробой при совместном −10,2% (1,02σ)
+  ✓ debt_capacity    защита сработала: выбранная строка «Кредиты под ГГ» не влияет на ковенант → подсказка выбрать другой драйвер
+quarterly_text / monthly_dates: все новые инструменты ✓ (периоды 2026Q1, 2026-01 в результатах)

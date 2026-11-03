@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Копилот ДККК · агент CashFlow</title>
+<meta http-equiv="Cache-Control" content="no-store">
+<style>
+  :root{
+    --blue:#1665d8; --blue-dark:#0f4fb0; --bg:#eef0f3; --card:#fff; --text:#1c2733; --muted:#77828f;
+    --green:#1fa356; --red:#d4382f; --orange:#e8940a; --purple:#7b5cd6; --border:#e2e6ea;
+    --mono:'SF Mono','Consolas','Menlo',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:13.5px}
+  .app{display:flex;flex-direction:column;height:100vh}
+  header{background:linear-gradient(90deg,#1057c4,#1a6fe0);color:#fff;display:flex;align-items:center;gap:14px;padding:9px 18px;flex-wrap:wrap}
+  header h1{font-size:15px;font-weight:700;white-space:nowrap}
+  header .sp{flex:1}
+  header label{font-size:12px;opacity:.9;display:flex;align-items:center;gap:6px}
+  header select,header input[type=text]{border:none;border-radius:7px;padding:6px 9px;font-size:12.5px;color:var(--text);background:#fff}
+  header input[type=text]{width:170px}
+  .badge{font-size:11px;font-weight:700;border-radius:20px;padding:3px 10px;background:rgba(255,255,255,.18)}
+  .main{flex:1;display:flex;min-height:0}
+  aside{width:340px;min-width:340px;background:#fff;border-right:1px solid var(--border);overflow-y:auto;padding:16px}
+  .chatcol{flex:1;display:flex;flex-direction:column;min-width:0}
+  .chat-wrap{flex:1;overflow-y:auto;padding:16px 22px}
+  .chat{max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+  .drop{border:2px dashed #c5d3e8;border-radius:12px;padding:18px;text-align:center;cursor:pointer;background:#f8fbff;transition:all .15s}
+  .drop:hover,.drop.over{border-color:var(--blue);background:#eef5ff}
+  .drop b{display:block;margin-bottom:4px}
+  .drop small{color:var(--muted)}
+  .sec{margin-top:16px}
+  .sec h3{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:7px}
+  .kv{font-size:12.5px;line-height:1.6}
+  .kv b{font-weight:600}
+  .pill{display:inline-block;font-size:10.5px;font-weight:700;border-radius:10px;padding:1px 7px;margin:1px 2px 1px 0}
+  .r-inputs{background:#e3edfc;color:#1553b0}.r-outputs{background:#e2f5e9;color:#137a3e}.r-dashboard{background:#fdf0dc;color:#9a5a00}
+  .r-calc,.r-assumptions,.r-is,.r-bs,.r-cf,.r-debt{background:#f0f2f5;color:#4d5866}.r-contents{background:#f5f0fd;color:#5b3fc0}
+  .sheetlist{font-size:12px;line-height:1.75}
+  .mono{font-family:var(--mono);font-size:11.5px;color:#0b57a4}
+  .metric{font-size:12px;padding:3px 0;border-bottom:1px dashed #eef1f4}
+  .msg-user{align-self:flex-end;background:var(--blue);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 15px;max-width:75%;line-height:1.5;white-space:pre-wrap}
+  .sys{align-self:center;font-size:12.5px;color:var(--muted);background:#e6eaf0;border-radius:10px;padding:9px 14px;max-width:700px;text-align:center;line-height:1.5}
+  .run{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .run-head{display:flex;align-items:center;gap:9px;padding:10px 16px;background:linear-gradient(90deg,#f6f9ff,#fbfcfe);border-bottom:1px solid var(--border);font-weight:600;font-size:13px}
+  .run-head .meta{margin-left:auto;font-size:11.5px;color:var(--muted);font-weight:400}
+  .run-body{padding:12px 16px;display:flex;flex-direction:column;gap:10px}
+  .spinner{width:14px;height:14px;border:2px solid #c9d9f5;border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+  .plan{border:1px solid var(--border);border-radius:10px;padding:10px 13px;background:#fafbfd}
+  .plan-title{font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px}
+  .ps{display:flex;gap:9px;font-size:12.5px;padding:3px 0;color:var(--muted);align-items:flex-start}
+  .ps .dot{width:15px;height:15px;border-radius:50%;border:1.5px solid #c4ccd6;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:9px}
+  .ps.in_progress{color:var(--text);font-weight:600}.ps.in_progress .dot{border-color:var(--blue);background:#eaf1fc}
+  .ps.done{color:var(--text)}.ps.done .dot{background:var(--green);border-color:var(--green);color:#fff}.ps.done .dot::before{content:'✓'}
+  .ps.skipped{text-decoration:line-through}
+  .ps .note{display:block;font-weight:400;color:var(--muted);font-size:11.5px}
+  .think{border-left:3px solid var(--purple);background:#f7f5fd;border-radius:0 9px 9px 0;padding:8px 12px;font-size:12.5px;color:#4d4761;font-style:italic;line-height:1.5}
+  .tool{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .tool-head{display:flex;align-items:center;gap:9px;padding:8px 12px;background:#f6f8fa;font-size:12.5px}
+  .tool-head .tname{font-family:var(--mono);font-size:12px;font-weight:700;color:#0b57a4}
+  .tool-head .st{margin-left:auto;font-size:11.5px;color:var(--muted);display:flex;gap:6px;align-items:center}
+  .tool.err .tool-head{background:#fdf1f0}
+  details{font-size:11.5px}
+  details summary{cursor:pointer;color:var(--muted);padding:6px 12px;border-top:1px dashed var(--border);list-style:none}
+  details summary::before{content:'▸ ';}
+  details[open] summary::before{content:'▾ ';}
+  pre{font-family:var(--mono);font-size:11px;background:#fbfcfd;padding:8px 12px;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;color:#3d4753}
+  .tres{padding:8px 12px;border-top:1px solid var(--border);font-size:12.5px;line-height:1.5}
+  .prog{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding:2px 2px}
+  table.t{border-collapse:collapse;width:100%;font-size:12px;margin:6px 0}
+  table.t th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);padding:4px 7px;border-bottom:1.5px solid var(--border)}
+  table.t td{padding:4px 7px;border-bottom:1px solid #eef1f4;vertical-align:top}
+  table.t td.n{font-family:var(--mono);text-align:right;white-space:nowrap;font-size:11.5px}
+  .chart{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#fff;overflow-x:auto}
+  .chart h4{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--muted);margin-top:4px}
+  .legend i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .answer{border:1px solid #cfe0c9;background:linear-gradient(180deg,#fbfef9,#fff);border-radius:12px;padding:14px 16px;line-height:1.6}
+  .answer h1,.answer h2,.answer h3{font-size:14.5px;margin:8px 0 6px}
+  .answer p{margin:6px 0}.answer ul,.answer ol{margin:6px 0 6px 20px}
+  .answer code{font-family:var(--mono);font-size:11.5px;background:#f0f3f7;padding:1px 4px;border-radius:4px}
+  .err-box{border:1px solid #f1c3bf;background:#fdf1f0;color:#8f1f18;border-radius:10px;padding:10px 14px;font-size:12.5px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{background:#fff;border:1px solid #c9d6ea;color:var(--blue-dark);border-radius:18px;padding:7px 13px;font-size:12.5px;cursor:pointer}
+  .chip:hover{background:#eaf1fc}
+  .input-bar{padding:10px 22px 14px}
+  .input-inner{max-width:920px;margin:0 auto;display:flex;gap:10px;align-items:flex-end;background:#fff;border:1px solid var(--border);border-radius:12px;padding:9px 12px;box-shadow:0 2px 8px rgba(20,40,70,.06)}
+  textarea{flex:1;border:none;outline:none;resize:none;font:inherit;max-height:160px;min-height:22px;line-height:1.5}
+  button.send{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:600;cursor:pointer}
+  button.send:disabled{opacity:.45;cursor:default}
+  .btn{border:1px solid #c9d6ea;background:#fff;color:var(--blue-dark);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+  .warn{background:#fdf3df;color:#8a5600;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.5}
+  .tools-row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+  .lvl{display:inline-block;font-size:10px;font-weight:800;border-radius:5px;padding:1px 6px;text-transform:uppercase}
+  .lvl.critical{background:#fde8e6;color:#b3261e}.lvl.warning{background:#fdf3df;color:#8a5600}.lvl.info{background:#e8f0fb;color:#2563ae}
+  .kpis{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+  .kpi{flex:1;min-width:120px;background:#f6f8fa;border:1px solid var(--border);border-radius:9px;padding:8px 10px}
+  .kpi b{display:block;font-size:18px;font-family:var(--mono)}
+  .kpi span{font-size:11px;color:var(--muted)}
+  .ok{color:var(--green);font-weight:700}.bad{color:var(--red);font-weight:700}
+  .toolbar{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}
+  .toolbar .btn{text-align:left;padding:8px 10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .toolbar .btn:disabled{opacity:.45;cursor:default}
+  .toolbar .btn.accent,.toolbar .btn.accent2{grid-column:span 3;padding:9px 12px;font-size:12.5px}
+  .toolbar .btn.accent{background:linear-gradient(90deg,#1665d8,#3b82f6);color:#fff;border-color:transparent}
+  .toolbar .btn.accent2{background:linear-gradient(90deg,#7b5cd6,#9a7bf0);color:#fff;border-color:transparent}
+  header .btn-demo{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer}
+  header .btn-demo:hover{background:rgba(255,255,255,.28)}
+  .heat td.c{font-family:var(--mono);font-size:11.5px;text-align:right;white-space:nowrap}
+  .heat td.okc{background:#e9f7ee}.heat td.badc{background:#fde8e6;color:#8f1f18;font-weight:700}
+  .heat td small{display:block;color:var(--muted);font-weight:400;font-size:10px}
+  .conf{font-size:10px;font-weight:800;border-radius:5px;padding:1px 6px}
+  .conf.high{background:#e2f5e9;color:#137a3e}.conf.medium{background:#fdf3df;color:#8a5600}.conf.low{background:#f0f2f5;color:#4d5866}
+  .expert-head{display:flex;gap:10px;align-items:flex-start}
+  .expert-head .av{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#7b5cd6,#1665d8);color:#fff;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+  /* модальные окна */
+  .modal-bg{position:fixed;inset:0;background:rgba(14,24,40,.55);z-index:900;display:flex;align-items:center;justify-content:center;padding:16px;animation:fade .2s}
+  .modal{background:#fff;border-radius:16px;max-width:820px;width:100%;max-height:92vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+  .modal-h{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#fff;z-index:1}
+  .modal-h h2{font-size:16px}.modal-h .x{margin-left:auto;cursor:pointer;font-size:20px;color:var(--muted);border:none;background:none}
+  .modal-b{padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+  .modal-f{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;position:sticky;bottom:0;background:#fff}
+  .fld label.h{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;margin-bottom:5px}
+  .fld textarea,.fld input[type=text],.fld input[type=number],.fld select{width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit;outline:none}
+  .fld textarea{min-height:80px;resize:vertical}
+  .fld textarea:focus,.fld input:focus{border-color:var(--blue)}
+  .pick{border:1px solid var(--border);border-radius:9px;max-height:210px;overflow:auto}
+  .pick .it{display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid #f1f3f6;font-size:12.5px}
+  .pick .it:last-child{border-bottom:none}
+  .pick .it .mono{flex-shrink:0}
+  .pick .it .u{color:var(--muted);font-size:11px;margin-left:auto}
+  .sres{margin-top:5px}
+  .sres .it{cursor:pointer}.sres .it:hover{background:#f3f7ff}
+  .samples{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .samples .chip{padding:4px 10px;font-size:11.5px}
+  .rules td input,.rules td select{border:1px solid var(--border);border-radius:6px;padding:4px 6px;font:inherit;font-size:12px;width:100%}
+  .rules td input[type=checkbox]{width:auto}
+  button.primary{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-weight:700;cursor:pointer}
+  button.primary:disabled{opacity:.5}
+  /* демо-тур */
+  .tour-block{position:fixed;inset:0;z-index:1000}
+  .tour-hole{position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(10,20,40,.66),0 0 0 3px rgba(120,170,255,.9);transition:all .35s cubic-bezier(.4,.1,.2,1);z-index:1001;pointer-events:none}
+  .tour-pop{position:fixed;z-index:1002;width:360px;max-width:calc(100vw - 24px);background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.35);padding:16px 18px;transition:top .35s,left .35s;animation:fade .25s}
+  .tour-pop .stage{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--blue)}
+  .tour-pop h3{font-size:15.5px;margin:4px 0 6px}
+  .tour-pop p{font-size:13px;line-height:1.55;color:#3d4753}
+  .tour-pop ul{margin:6px 0 0 18px;font-size:12.5px;line-height:1.55;color:#3d4753}
+  .tour-nav{display:flex;align-items:center;gap:6px;margin-top:12px}
+  .tour-nav button{white-space:nowrap}
+  .tour-dots{display:flex;gap:4px;margin-right:auto}
+  .tour-dots i{width:6px;height:6px;border-radius:50%;background:#d5dce6}.tour-dots i.on{background:var(--blue);width:16px;border-radius:4px}
+  .cjm{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin:6px 0}
+  .cjm .st{background:#f6f9ff;border:1px solid #dbe6f7;border-radius:12px;padding:10px 8px;text-align:center;position:relative;cursor:pointer;transition:transform .15s}
+  .cjm .st:hover{transform:translateY(-2px);border-color:var(--blue)}
+  .cjm .st .ic{font-size:22px}.cjm .st b{display:block;font-size:12px;margin-top:4px}.cjm .st span{display:block;font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.35}
+  .cjm .st:not(:last-child)::after{content:'→';position:absolute;right:-9px;top:38%;color:#9fb3d1;font-weight:700}
+  .demo-tag{font-size:10.5px;font-weight:800;background:#fdf0dc;color:#9a5a00;border-radius:6px;padding:2px 7px;margin-left:6px}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .busy{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;background:rgba(255,255,255,.14);border-radius:14px;padding:4px 10px;cursor:pointer;max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .busy i{width:8px;height:8px;border-radius:50%;background:#5fe08f;flex-shrink:0}
+  .busy.on i{background:#ffd166;animation:pulse 1s infinite}.busy.slow i{background:#ff8a65}
+  @keyframes pulse{50%{opacity:.35}}
+  .logdrawer{position:fixed;top:46px;right:0;bottom:0;width:520px;max-width:100vw;background:#0f1722;color:#d7e0ea;z-index:950;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;box-shadow:-10px 0 30px rgba(0,0,0,.3)}
+  .logdrawer.open{transform:none}
+  .log-h{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #223042;font-size:13px}
+  .log-h .sp{flex:1}.log-h select{background:#1a2533;color:#d7e0ea;border:1px solid #2c3b4e;border-radius:6px;font-size:12px;padding:3px}
+  .log-h .btn{background:#1a2533;color:#d7e0ea;border-color:#2c3b4e;padding:3px 9px}
+  .log-state{font-size:11.5px;color:#9fb3c8}
+  .log-list{flex:1;overflow:auto;font-family:var(--mono);font-size:11.5px;line-height:1.5;padding:8px 10px}
+  .log-list .l{white-space:pre-wrap;word-break:break-word;border-bottom:1px solid #16212e;padding:2px 0}
+  .log-list .t{color:#6c8199;margin-right:6px}.log-list .s{display:inline-block;min-width:66px;color:#7fb2ff;margin-right:4px}
+  .log-list .lv-error{color:#ff8a80}.log-list .lv-warn{color:#ffd166}
+  .log-list .src-llm .s{color:#c3a6ff}.log-list .src-engine .s{color:#7fe0b0}.log-list .src-op .s{color:#ffd166}
+  @media (max-width:900px){ .cjm{grid-template-columns:repeat(2,1fr)} .cjm .st::after{display:none} }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (max-width:900px){ aside{display:none} aside.show{display:block;position:fixed;inset:0;z-index:20;width:auto} .msg-user{max-width:92%} header input[type=text]{width:120px} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Копилот ДККК · агент CashFlow</h1>
+    <span class="badge" id="eng">движок: —</span>
+    <span class="sp"></span>
+    <label>Модель LLM <select id="provider"></select></label>
+    <input type="text" id="model" placeholder="имя модели">
+    <label title="Агент сначала строит план и отмечает шаги" id="planLbl"><input type="checkbox" id="plan" checked> план</label>
+    <span class="busy" id="busy" onclick="toggleLog(true)" title="Открыть журнал расчётов"><i></i><span id="busyText">свободно</span></span>
+    <button class="btn-demo" id="btnStop" onclick="stopRun()" style="display:none">⏹ Остановить</button>
+    <button class="btn-demo" id="btnLog" onclick="toggleLog()">📜 Журнал</button>
+    <button class="btn-demo" id="btnTour" onclick="tourStart()">▶ Демо-тур</button>
+  </header>
+  <div class="main">
+    <aside id="aside">
+      <div class="drop" id="drop"><b>📂 Загрузить модель Excel</b><small>перетащите .xlsx сюда или нажмите</small></div>
+      <input type="file" id="file" accept=".xlsx,.xlsm" hidden>
+      <div style="display:flex;gap:6px;margin-top:8px"><input type="text" id="lpath" placeholder="или путь: ~/Documents/модель.xlsx" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:12px">
+        <button class="btn" onclick="uploadPath($('#lpath').value.trim())" title="Открыть файл с этого компьютера по пути">Открыть</button></div>
+      <div class="toolbar" id="toolbar">
+        <button class="btn" id="btnMap" onclick="direct('map')" disabled>🗺 Карта модели</button>
+        <button class="btn" id="btnAudit" onclick="direct('audit')" disabled>🔍 Предпроверка</button>
+        <button class="btn" id="btnDeps" onclick="direct('deps')" disabled title="От чего зависят ключевые метрики — по экономическим факторам">🧭 Факторы</button>
+        <button class="btn accent2" id="btnExpert" onclick="openExpert()" disabled>🧑‍🏭 Отраслевой эксперт: новость → стресс</button>
+        <button class="btn accent" id="btnKpki" onclick="openKpki()" disabled>📑 Заключение для КПКИ (Word)</button>
+      </div>
+      <div id="card"></div>
+    </aside>
+    <div class="chatcol">
+      <div class="chat-wrap" id="wrap"><div class="chat" id="chat">
+        <div class="sys">Загрузите модель слева. Агент построит её каркас (экспресс-анализ), а затем будет искать нужные листы и строки, прогонять стресс-сценарии и подбирать значения по вашему запросу.</div>
+      </div></div>
+      <div class="input-bar">
+        <div class="input-inner">
+          <textarea id="q" rows="1" placeholder="Например: стресс Urals −10% и −20% — что будет с Net Debt / EBITDA и DSCR?"></textarea>
+          <button class="send" id="send" disabled>Отправить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="logdrawer" id="logDrawer">
+  <div class="log-h"><b>📜 Журнал расчётов</b><span id="logState" class="log-state">—</span>
+    <span class="sp"></span>
+    <select id="logFilter"><option value="">все</option><option value="engine">пересчёт</option><option value="llm">LLM</option><option value="tool">инструменты</option><option value="progress">прогресс</option><option value="op">задачи</option></select>
+    <button class="btn" onclick="$('#logList').innerHTML=''">очистить</button><button class="btn" onclick="toggleLog(false)">×</button></div>
+  <div class="log-list" id="logList"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const chat = $('#chat'), wrap = $('#wrap');
+let SID = null, running = false, DEFAULTS = null;
+function saveBlob(b, name){ const u=URL.createObjectURL(b); const x=document.createElement('a'); x.href=u; x.download=name; x.click(); setTimeout(()=>URL.revokeObjectURL(u),3000); }
+const COLORS = ['#1c2733','#1665d8','#e8940a','#d4382f','#7b5cd6','#1fa356','#0aa2b5','#b0518f'];
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = v => v==null ? '—' : (typeof v==='number' ? (Math.abs(v)>=1000 ? v.toLocaleString('ru-RU',{maximumFractionDigits:0}) : v.toLocaleString('ru-RU',{maximumFractionDigits:3})) : esc(v));
+function el(html){ const d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstElementChild; }
+function add(node, parent=chat){ parent.appendChild(node); wrap.scrollTop = wrap.scrollHeight; return node; }
+const scroll = () => { wrap.scrollTop = wrap.scrollHeight; };
+
+/* ── мини-markdown ── */
+function md(src){
+  const lines = esc(src).split('\n'); let out=[], i=0;
+  const inline = t => t.replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|[\s(])_([^_]+)_(?=[\s.,)]|$)/g,'$1<i>$2</i>').replace(/\*([^*]+)\*/g,'<i>$1</i>');
+  while(i<lines.length){
+    const l=lines[i];
+    if(/^\s*\|.*\|\s*$/.test(l) && i+1<lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i+1])){
+      const row = s => s.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+      const head=row(l); i+=2; let body=[];
+      while(i<lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){ body.push(row(lines[i])); i++; }
+      const num = c => /^[−\-+]?[\d\s.,]+%?$/.test(c);
+      out.push(`<table class="t"><tr>${head.map(h=>`<th>${inline(h)}</th>`).join('')}</tr>${body.map(r=>`<tr>${r.map(c=>`<td class="${num(c)?'n':''}">${inline(c)}</td>`).join('')}</tr>`).join('')}</table>`);
+      continue;
+    }
+    let m;
+    if((m=l.match(/^(#{1,4})\s+(.*)/))){ out.push(`<h3>${inline(m[2])}</h3>`); i++; continue; }
+    if(/^\s*([-*•]|\d+\.)\s+/.test(l)){
+      const ordered=/^\s*\d+\./.test(l); let items=[];
+      while(i<lines.length && /^\s*([-*•]|\d+\.)\s+/.test(lines[i])){ items.push(lines[i].replace(/^\s*([-*•]|\d+\.)\s+/,'')); i++; }
+      out.push(`<${ordered?'ol':'ul'}>${items.map(x=>`<li>${inline(x)}</li>`).join('')}</${ordered?'ol':'ul'}>`); continue;
+    }
+    if(!l.trim()){ i++; continue; }
+    let para=[l]; i++;
+    while(i<lines.length && lines[i].trim() && !/^(#|\s*[-*•]\s|\s*\d+\.\s|\s*\|)/.test(lines[i])){ para.push(lines[i]); i++; }
+    out.push(`<p>${para.map(inline).join('<br>')}</p>`);
+  }
+  return out.join('');
+}
+
+/* ── настройки ── */
+async function loadConfig(){
+  const c = await (await fetch('/api/config')).json();
+  try{ const v=await (await fetch('/api/version')).json(); document.querySelector('header h1').insertAdjacentHTML('beforeend', ` <span style="font-weight:400;font-size:11px;opacity:.7">v${esc(v.version)}</span>`); }catch(e){}
+  const sel = $('#provider');
+  c.providers.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=p.title+(p.ready?'':' — не настроен'); o.dataset.model=p.model; sel.appendChild(o); });
+  const saved = localStorageGet('provider');
+  sel.value = saved || c.default_provider;
+  const syncModel = () => { $('#model').placeholder = sel.selectedOptions[0]?.dataset.model || ''; };
+  sel.onchange = () => { syncModel(); localStorageSet('provider', sel.value); if(SID && !SEM_LLM && sel.value!=='mock') runSemantics(false); }; syncModel();
+}
+function localStorageGet(k){ try{ return localStorage.getItem('cf_'+k); }catch(e){ return null; } }
+function localStorageSet(k,v){ try{ localStorage.setItem('cf_'+k,v); }catch(e){} }
+
+/* ── загрузка модели ── */
+const drop=$('#drop'), fileIn=$('#file');
+drop.onclick = () => fileIn.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if(e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); };
+fileIn.onchange = () => fileIn.files[0] && upload(fileIn.files[0]);
+
+async function afterUpload(r, box){
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.statusText);
+    SID = d.session_id; box.remove();
+    $('#eng').textContent = 'движок: ' + (d.engine || 'нет — только чтение');
+    renderCard(d);
+    add(el(`<div class="sys">✓ Экспресс-анализ «${esc(d.card.file)}» готов за ${d.seconds} с: ${d.card.sheets_total} листов, ${d.card.formulas_total.toLocaleString('ru-RU')} формул. Карточка модели — слева; агент опирается на неё во всех ответах.${d.engine?'':'<br><b>Пересчёт недоступен:</b> '+esc(d.engine_error||'')}</div>`));
+    chipsRender();
+    $('#send').disabled = false;
+    ['#btnMap','#btnAudit','#btnDeps','#btnExpert','#btnKpki'].forEach(b=>$(b).disabled=false);
+    DEFAULTS = null;
+    renderSem(d.semantics, 'rules');
+    runSemantics(false);
+}
+async function uploadPath(p){
+  if(running||!p) return;
+  const box = add(el(`<div class="sys"><span class="spinner" style="display:inline-block;vertical-align:-2px;margin-right:6px"></span>Загружаю «${esc(p)}»…</div>`));
+  try{
+    const r = await fetch('/api/upload_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p, session_id:SID})});
+    await afterUpload(r, box);
+  }catch(e){ box.className='err-box'; box.textContent='Ошибка загрузки: '+e.message; }
+}
+async function upload(f){
+  if(running) return;
+  const box = add(el(`<div class="sys"><span class="spinner" style="display:inline-block;vertical-align:-2px;margin-right:6px"></span>Загружаю «${esc(f.name)}»: строю индекс листов и граф зависимостей, запускаю движок пересчёта…</div>`));
+  try{
+    let r;
+    if(f.path){ r = await fetch('/api/upload_path', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:f.path, session_id:SID})}); }
+    else { const fd = new FormData(); fd.append('file', f); r = await fetch('/api/upload'+(SID?`?session_id=${SID}`:''), {method:'POST', body:fd}); }
+    await afterUpload(r, box);
+  }catch(e){ box.className='err-box'; box.textContent='Ошибка загрузки: '+e.message; }
+}
+
+/* ── смысловой слой: разбор модели (по умолчанию после загрузки) ── */
+async function runSemantics(force){
+  if(!SID) return;
+  const st=$('#semStatus');
+  if(st) st.innerHTML='<span class="spinner" style="display:inline-block;vertical-align:-2px;margin-right:5px"></span>разбираю смысл строк…';
+  const ctx={body:document.createElement('div'), meta:{textContent:''}, head:document.createElement('div'), tools:{}, plan:null, n:0, t0:Date.now(), prog:null, sem:true};
+  try{
+    const r=await fetch('/api/semantics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:SID, force, ...llm()})});
+    if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.detail||r.statusText); }
+    const reader=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    while(true){ const {value,done}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); let k;
+      while((k=buf.indexOf('\n\n'))>=0){ const chunk=buf.slice(0,k); buf=buf.slice(k+2); let ev='', data='';
+        chunk.split('\n').forEach(l=>{ if(l.startsWith('event:')) ev=l.slice(6).trim(); else if(l.startsWith('data:')) data+=l.slice(5).trim(); });
+        if(!data) continue; const d=JSON.parse(data);
+        if(ev==='progress' && $('#semStatus')) $('#semStatus').textContent=d.text;
+        if(ev==='semantics') renderSem(d, d.offline?'offline':'done');
+        if(ev==='error' && $('#semStatus')) $('#semStatus').innerHTML=`<span class="bad">${esc(d.text)}</span>`;
+      } }
+  }catch(e){ if($('#semStatus')) $('#semStatus').innerHTML=`<span class="bad">${esc(e.message)}</span>`; }
+}
+const FCOL={price_sales:'#1665d8',revenue:'#3b82f6',volume:'#0aa2b5',tariff:'#5b8def',price_inputs:'#b0518f',fx:'#e8940a',rate:'#d4382f',
+  inflation:'#9a7b2f',opex:'#7b5cd6',capex:'#6b4fc9',tax:'#77828f',wc:'#4d8f6a',debt:'#1c2733',scenario:'#9aa4b0',other:'#c3cad3'};
+let SEM_LLM=false;
+function renderSem(su, state){
+  const box=$('#semBox'); if(!box||!su) return;
+  SEM_LLM = !!su.llm;
+  const st = state==='rules' ? 'по правилам; LLM-разбор запускается…' : state==='offline' ? 'по правилам (офлайн-режим без LLM — выберите OpenAI/GigaChat и нажмите ↻)' :
+    (su.llm ? `описания от ${esc(su.llm.model)}: ${su.llm.rows} строк${su.cached?' (из кэша)':''}` : 'по правилам');
+  box.innerHTML=`<div class="kv"><b>Отрасль:</b> ${esc(su.industry_name)} · ${su.rows} строк в паспорте<br><span id="semStatus" style="color:var(--muted);font-size:11.5px">${st}</span>
+    <a href="#" id="semRe" title="Перезапустить разбор" style="font-size:11.5px;margin-left:4px">↻</a></div>
+    <div style="margin-top:6px">${su.factors.map(f=>`<span class="pill fchip" data-f="${f.id}" style="cursor:pointer;background:${FCOL[f.id]||'#ccc'}1f;color:${FCOL[f.id]||'#333'}">${esc(f.name)} ${f.rows}</span>`).join('')}</div>
+    ${su.subfactors.length?`<div style="margin-top:4px">${su.subfactors.map(f=>`<span class="pill r-calc">${esc(f.name)} ${f.rows}</span>`).join('')}</div>`:''}`;
+  $('#semRe').onclick=e=>{ e.preventDefault(); runSemantics(true); };
+  box.querySelectorAll('.fchip').forEach(c=>c.onclick=()=>openFactor(c.dataset.f));
+}
+async function openFactor(fid){
+  const d=await (await fetch('/api/semantics/'+SID)).json();
+  const rows=d.rows.filter(r=>r.factor===fid && r.kind!=='metric');
+  const f=d.summary.factors.find(x=>x.id===fid);
+  const m=modal(`${esc(f?f.name:fid)} · строки модели`, `<table class="t"><tr><th>Показатель</th><th>Описание</th><th>Где</th></tr>${rows.slice(0,200).map(r=>`<tr><td><b>${esc(r.name)}</b> <span style="color:var(--muted)">${esc(r.unit||'')}</span></td><td style="font-size:12px">${esc(r.desc||'')}</td><td class="mono">${esc(r.sheet)}!${r.row}</td></tr>`).join('')}</table>`, 'Закрыть', ()=>{});
+  m.querySelector('[data-k=cancel]').style.display='none';
+}
+
+function renderCard(d){
+  const c=d.card;
+  const sheets = c.sheets.filter(s=>s.role!=='separator').map(s=>`<span class="pill r-${s.role}" title="${s.formulas} формул${s.years?', '+s.years[0]+'–'+s.years[1]:''}">${esc(s.name)}</span>`).join('');
+  const metrics = c.key_metrics.map(m=>`<div class="metric"><b>${esc(m.metric)}</b> → ${m.candidates.map(x=>`<span class="mono">${esc(x.sheet)}!${x.row}</span>`).join(', ')}</div>`).join('');
+  const drivers = c.drivers.slice(0,10).map(x=>`<div class="metric"><span class="mono">${esc(x.sheet)}!${x.row}</span> ${esc(x.label)}</div>`).join('');
+  const flows = c.sheet_flows.slice(0,8).map(f=>`<div class="metric">${esc(f.from)} → ${esc(f.to)} <span style="color:var(--muted)">(${f.refs})</span></div>`).join('');
+  $('#card').innerHTML = `
+    <div class="sec"><h3>Карточка модели</h3><div class="kv"><b>${esc(c.file)}</b><br>${c.sheets_total} листов · ${c.formulas_total.toLocaleString('ru-RU')} формул<br>${esc(c.template)}<br>итеративный расчёт: ${c.iterative_calc?'да (циклические ссылки)':'нет'}<br>прогноз по умолчанию с <b>${c.forecast_start??'—'}</b></div></div>
+    ${d.engine?'':`<div class="sec warn">Пересчёт недоступен: ${esc(d.engine_error||'')}. Работают поиск и чтение, стресс-тесты — нет.</div>`}
+    <div class="sec"><h3>Смысл модели: экономические факторы</h3><div id="semBox"></div></div>
+    <div class="sec"><h3>Листы по ролям</h3><div class="sheetlist">${sheets}</div></div>
+    <div class="sec"><h3>Ключевые метрики (кандидаты)</h3>${metrics||'<div class="kv">не найдены</div>'}</div>
+    <div class="sec"><h3>Возможные драйверы</h3>${drivers||'<div class="kv">не найдены</div>'}</div>
+    <div class="sec"><h3>Потоки между листами</h3>${flows}</div>`;
+}
+
+const EXAMPLES = [
+  'Оцени устойчивость заёмщика: ковенанты, ключевые драйверы, стресс-пакет банка и запас прочности',
+  'Посчитай метрики кредитора: CFADS, DSCR, LLCR и сколько долга модель выдержит при DSCR ≥ 1,3',
+  'Построй карту безопасной зоны цена × курс для ковенанта Net Debt / EBITDA ≤ 3,5',
+  'Обратный стресс: при каком совместном падении цен и курса нарушится ковенант и насколько это вероятно?',
+  'Что будет, если запуск ключевого проекта задержится на год, а CAPEX вырастет на 20%?',
+  'Сделай предпроверку модели и объясни 3 самых важных замечания',
+  'От чего на самом деле зависит устойчивость заёмщика? Разложи по экономическим факторам',
+]
+let chipsNode=null;
+function chipsRender(){
+  if(chipsNode) chipsNode.remove();
+  chipsNode = add(el(`<div class="chips">${EXAMPLES.map(e=>`<div class="chip">${esc(e)}</div>`).join('')}</div>`));
+  chipsNode.querySelectorAll('.chip').forEach((c,i)=>c.onclick=()=>{ $('#q').value=EXAMPLES[i]; send(); });
+}
+
+/* ── диалог ── */
+const q=$('#q');
+q.addEventListener('input',()=>{ q.style.height='auto'; q.style.height=Math.min(q.scrollHeight,160)+'px'; });
+q.addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+$('#send').onclick = send;
+
+function newRun(title, meta=''){
+  if(chipsNode){ chipsNode.remove(); chipsNode=null; }
+  const run = add(el(`<div class="run"><div class="run-head"><span class="spinner"></span><span class="state">${esc(title)}</span><span class="meta">${esc(meta)}</span></div><div class="run-body"></div></div>`));
+  return {run, body:run.querySelector('.run-body'), meta:run.querySelector('.meta'), head:run.querySelector('.run-head'), tools:{}, plan:null, n:0, t0:Date.now(), prog:null};
+}
+async function streamInto(url, payload, ctx){
+  try{
+    const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.detail||r.statusText); }
+    const reader=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    while(true){
+      const {value,done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let k;
+      while((k=buf.indexOf('\n\n'))>=0){
+        const chunk=buf.slice(0,k); buf=buf.slice(k+2);
+        let ev='message', data='';
+        chunk.split('\n').forEach(line=>{ if(line.startsWith('event:')) ev=line.slice(6).trim(); else if(line.startsWith('data:')) data+=line.slice(5).trim(); });
+        if(ev && data) handle(ev, JSON.parse(data), ctx);
+      }
+    }
+  }catch(e){ add(el(`<div class="err-box">${esc(e.message)}</div>`), ctx.body); }
+  const secs=((Date.now()-ctx.t0)/1000).toFixed(1);
+  ctx.head.innerHTML=`<span style="color:var(--green)">✓</span><span>Готово</span><span class="meta">${ctx.n} вызовов инструментов · ${secs} с</span>`;
+}
+const llm = () => ({provider:$('#provider').value, model:$('#model').value.trim()||null});
+
+async function send(){
+  const text=q.value.trim();
+  if(!text || running || !SID) return;
+  running=true; $('#send').disabled=true; q.value=''; q.style.height='auto';
+  add(el(`<div class="msg-user">${esc(text)}</div>`));
+  const ctx = newRun('Агент работает');
+  await streamInto('/api/chat', {session_id:SID, message:text, plan_mode:$('#plan').checked, ...llm()}, ctx);
+  running=false; $('#send').disabled=false; chipsRender();
+}
+
+function handle(ev, d, ctx){
+  const body=ctx.body;
+  if(ev==='status'){ ctx.meta.textContent=d.text; }
+  else if(ev==='plan'){ renderPlan(d, ctx); }
+  else if(ev==='think'){ add(el(`<div class="think">✦ ${esc(d.text)}</div>`), body); }
+  else if(ev==='tool_start'){
+    ctx.n++;
+    const card=add(el(`<div class="tool"><div class="tool-head">⚙ <span class="tname">${esc(d.name)}</span><span class="st"><span class="spinner"></span>выполняется…</span></div>
+      <details><summary>аргументы</summary><pre>${esc(JSON.stringify(d.args,null,2))}</pre></details></div>`), body);
+    ctx.tools[d.id]=card; ctx.prog=null;
+  }
+  else if(ev==='progress'){
+    const card=Object.values(ctx.tools).pop();
+    if(card){ if(!ctx.prog){ ctx.prog=el('<div class="prog tres"></div>'); card.appendChild(ctx.prog); } ctx.prog.textContent=d.text; scroll(); }
+  }
+  else if(ev==='tool_end'){
+    const card=ctx.tools[d.id]; if(!card) return;
+    if(ctx.prog){ ctx.prog.remove(); ctx.prog=null; }
+    card.querySelector('.st').innerHTML = d.ok ? `<span style="color:var(--green)">✓</span> ${d.seconds} с` : `<span style="color:var(--red)">✗ ошибка</span>`;
+    if(!d.ok) card.classList.add('err');
+    const sum = summarize(d.name, d.result, d.ok);
+    if(sum) card.appendChild(el(`<div class="tres">${sum}</div>`));
+    card.appendChild(el(`<details><summary>результат</summary><pre>${esc(typeof d.result==='string'?d.result:JSON.stringify(d.result,null,2))}</pre></details>`));
+    if(['create_plan','update_plan'].includes(d.name)) card.style.display='none';
+    scroll();
+  }
+  else if(ev==='chart'){ renderCharts(d, body); }
+  else if(ev==='map'){ renderMap(d, body); }
+  else if(ev==='audit'){ renderAudit(d, body); }
+  else if(ev==='tornado'){ renderTornado(d, body); }
+  else if(ev==='covenants'){ renderCov(d, body); }
+  else if(ev==='headroom'){ renderHeadroom(d, body); }
+  else if(ev==='histogram'){ renderHist(d, body); }
+  else if(ev==='lender'){ renderLender(d, body); }
+  else if(ev==='matrix'){ renderMatrix(d, body); }
+  else if(ev==='safezone'){ renderSafe(d, body); }
+  else if(ev==='reverse'){ renderReverse(d, body); }
+  else if(ev==='capacity'){ renderCapacity(d, body); }
+  else if(ev==='expert'){ renderExpert(d, body); }
+  else if(ev==='factors'){ renderFactors(d, body); }
+  else if(ev==='semmap'){ renderSemMap(d, body); }
+  else if(ev==='deps'){ renderDeps(d, body); }
+  else if(ev==='semantics'){ renderSem(d,'done'); }
+  else if(ev==='answer'){
+    const a=add(el(`<div class="answer">${md(d.text)}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><a class="btn" data-k="docx" href="#">⬇ Word (.docx)</a><a class="btn" data-k="md" href="#">⬇ Markdown (.md)</a></div></div>`), body);
+    const fname = d.report ? 'Заключение_КПКИ' : 'Копилот_ответ';
+    a.querySelector('[data-k=md]').onclick=e=>{ e.preventDefault(); saveBlob(new Blob([d.text],{type:'text/markdown'}), fname+'.md'); };
+    a.querySelector('[data-k=docx]').onclick=async e=>{ e.preventDefault();
+      const r=await fetch('/api/docx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markdown:d.text,filename:fname+'.docx'})});
+      if(r.ok) saveBlob(await r.blob(), fname+'.docx'); };
+  }
+  else if(ev==='error'){ add(el(`<div class="err-box">⚠ ${esc(d.text)}</div>`), body); }
+}
+
+function renderPlan(p, ctx){
+  const html=`<div class="plan"><div class="plan-title">📋 План: ${esc(p.goal||'')}</div>${p.steps.map(s=>`<div class="ps ${s.status}"><span class="dot"></span><span>${esc(s.title)}${s.note?`<span class="note">${esc(s.note)}</span>`:''}</span></div>`).join('')}</div>`;
+  if(ctx.plan){ const n=el(html); ctx.plan.replaceWith(n); ctx.plan=n; }
+  else { ctx.plan=add(el(html), ctx.body); }
+}
+
+function summarize(name, r, ok){
+  if(!ok) return `<span style="color:var(--red)">${esc(r && r.error || r)}</span>`;
+  if(typeof r==='string') return '';
+  if(name==='search_rows' && r.rows){
+    return `Найдено ${r.found} · топ ${r.rows.length}:<table class="t"><tr><th>Ячейка</th><th>Подпись</th><th>Тип</th><th>Значения</th></tr>${r.rows.slice(0,8).map(x=>`<tr><td class="mono">${esc(x.sheet)}!${x.row}</td><td>${esc(x.label)} <span style="color:var(--muted)">${esc(x.unit)}</span></td><td>${esc(x.kind)}</td><td class="n">${Object.entries(x.values).slice(0,4).map(([y,v])=>`${y}: ${fmt(v)}`).join(' · ')}</td></tr>`).join('')}</table>`;
+  }
+  if(name==='read_rows' && r.rows){
+    return `<table class="t"><tr><th>Строка</th><th>Подпись</th><th>Значения</th></tr>${r.rows.map(x=>`<tr><td class="mono">${esc(r.sheet)}!${x.row}</td><td>${esc(x.label||x.error)}</td><td class="n">${Object.entries(x.values||{}).slice(-6).map(([y,v])=>`${y}: ${fmt(v)}`).join(' · ')}</td></tr>`).join('')}</table>`;
+  }
+  if(name==='trace_row' && r.levels){
+    return `${esc(r.start)} · ${r.direction==='precedents'?'источники':'зависимые'}: ${r.levels.map(l=>`уровень ${l.depth} — ${l.count}`).join(', ')}<br>${Object.entries(r.by_factor||{}).map(([s,n])=>`<span class="pill r-calc">${esc(s)} ${n}</span>`).join('')}`;
+  }
+  if(name==='goal_seek'){
+    return r.converged ? `<b>Найдено значение шока: ${fmt(r.value)}</b> → метрика (${esc(r.aggregate)}) = ${fmt(r.metric_value)} за ${r.iterations.length} прогонов` : esc(r.message);
+  }
+  if(name==='run_stress' && r.scenarios){
+    return `${r.scenarios.length} сценариев рассчитано, модель восстановлена${r.notes&&r.notes.length?'<br><span style="color:var(--muted)">'+esc(r.notes.join('; '))+'</span>':''}`;
+  }
+  if(name==='find_drivers' && r.drivers) return `Проверено ${r.candidates_tested} из ${r.upstream_inputs_total} допущений, найдено ${r.drivers.length} влияющих; вне Inputs: ${r.top_outside_inputs}`;
+  if(name==='covenant_check' && r.rules) return r.rules.map(x=>`${esc(x.rule)}: ${x.breach_years.length?'<span class="bad">пробой '+x.breach_years.join(', ')+'</span>':'<span class="ok">выполняется</span>'}`).join('<br>');
+  if(name==='headroom' && r.drivers) return `${esc(r.rule)} · база ${fmt(r.base)}`;
+  if(name==='monte_carlo') return `${r.runs} прогонов · p5–p95: ${fmt(r.p5)}–${fmt(r.p95)}${r.breach_probability!=null?` · вероятность пробоя <b>${(r.breach_probability*100).toFixed(1)}%</b>`:''}`;
+  if(name==='audit_model' && r.findings) return `${r.total} замечаний`;
+  if(name==='model_map' && r.sheets) return `${r.sheets.length} листов в карте`;
+  if(name==='explain_cell') return `${esc(r.cell)} = ${fmt(r.value)} · <span class="mono">${esc(r.formula||'ввод')}</span>`;
+  if(name==='get_model_card') return `Карточка: ${r.sheets_total} листов, ${r.formulas_total} формул, движок: ${esc(r.engine)}`;
+  if(name==='list_sheets' && r.sheets) return `${r.sheets.length} листов`;
+  if(name==='lender_metrics' && r.summary) return `min DSCR <b>${fmt(r.summary.min_dscr)}</b> (${esc(r.summary.min_dscr_period||'—')}) · avg ${fmt(r.summary.avg_dscr)} · min LLCR ${fmt(r.summary.min_llcr)}`;
+  if(name==='stress_pack' && r.rows) return `${r.rows.length-1} сценариев · пробой в ${r.breach_scenarios.length}`;
+  if(name==='safe_zone' && r.grid) return `${r.grid.length*r.grid[0].length} точек · безопасных ${(r.safe_share*100).toFixed(0)}%`;
+  if(name==='reverse_stress') return r.breach_found ? `пробой при совместном шоке ×${fmt(r.multiple)} · ${esc(r.plausibility||'')}` : esc(r.message||'');
+  if(name==='debt_capacity') return r.message ? esc(r.message) : `драйвер долга: ${r.max_change_pct>0?'+':''}${fmt(r.max_change_pct)}% до ковенанта · ${esc((r.binding_covenant||[]).join('; '))}`;
+  if(name==='factor_drivers' && r.factors) return `${r.factors.length} факторов · главный: <b>${esc((r.factors[0]||{}).name||'—')}</b>`;
+  if(name==='dependency_analysis' && r.findings) return `${r.findings.length} выводов о зависимостях`;
+  if(name==='industry_expert' && r.assumptions) return `${esc(r.title)} · ${r.assumptions.length} полей${r.stress?' · стресс выполнен':''}`;
+  return '';
+}
+
+/* ── графики стресс-теста ── */
+function renderCharts(d, body){
+  const box=add(el('<div style="display:flex;flex-direction:column;gap:8px"></div>'), body);
+  d.metrics.forEach(m=>{
+    const W=640,H=200,L=56,R=14,T=12,B=26;
+    const all=m.series.flatMap(s=>s.values).filter(v=>typeof v==='number');
+    if(!all.length) return;
+    let lo=Math.min(...all), hi=Math.max(...all); if(lo===hi){ lo-=1; hi+=1; } const pad=(hi-lo)*.08; lo-=pad; hi+=pad;
+    const X=i=>L+(m.years.length<2?0:i*(W-L-R)/(m.years.length-1)), Y=v=>T+(hi-v)*(H-T-B)/(hi-lo);
+    let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:480px;font-family:var(--mono)">`;
+    for(let k=0;k<=4;k++){ const v=lo+(hi-lo)*k/4, y=Y(v); svg+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#eef1f4"/><text x="${L-6}" y="${y+3}" font-size="9.5" fill="#77828f" text-anchor="end">${fmt(+v.toPrecision(3))}</text>`; }
+    m.years.forEach((y,i)=>{ svg+=`<text x="${X(i)}" y="${H-8}" font-size="9.5" fill="#77828f" text-anchor="middle">${y}</text>`; });
+    m.series.forEach((s,si)=>{
+      const pts=s.values.map((v,i)=>typeof v==='number'?`${X(i)},${Y(v)}`:null).filter(Boolean).join(' ');
+      svg+=`<polyline points="${pts}" fill="none" stroke="${COLORS[si%COLORS.length]}" stroke-width="${si?2:2.5}" ${si?'':'stroke-dasharray="5 3"'}/>`;
+      s.values.forEach((v,i)=>{ if(typeof v==='number') svg+=`<circle cx="${X(i)}" cy="${Y(v)}" r="2.6" fill="${COLORS[si%COLORS.length]}"><title>${esc(s.name)} · ${m.years[i]}: ${fmt(v)}</title></circle>`; });
+    });
+    svg+='</svg>';
+    const table=`<table class="t"><tr><th>Сценарий</th>${m.years.map(y=>`<th style="text-align:right">${y}</th>`).join('')}</tr>${m.series.map(s=>`<tr><td>${esc(s.name)}</td>${s.values.map(v=>`<td class="n">${fmt(v)}</td>`).join('')}</tr>`).join('')}</table>`;
+    add(el(`<div class="chart"><h4>${esc(m.name)} · <span class="mono">${esc(m.ref)}</span> ${esc(m.unit||'')}</h4>${svg}
+      <div class="legend">${m.series.map((s,si)=>`<span><i style="background:${COLORS[si%COLORS.length]}"></i>${esc(s.name)}</span>`).join('')}</div>${table}</div>`), box);
+  });
+  add(el(`<div><a class="btn" href="/api/export/${SID}">⬇ Выгрузить результаты стресс-тестов (.xlsx)</a></div>`), box);
+}
+
+/* ── прямые функции без LLM ── */
+async function direct(kind, force=false){
+  if(!SID || running) return;
+  running=true; $('#send').disabled=true;
+  const title={map:'Карта модели', audit:'Предпроверка модели', deps:'От чего зависят ключевые метрики'}[kind];
+  const ctx=newRun(title, kind==='deps'?'пересчёт по факторам · разбор — выбранной LLM':'без LLM · по формулам файла');
+  await streamInto('/api/direct', {session_id:SID, kind, force, ...llm()}, ctx);
+  running=false; $('#send').disabled=false; chipsRender();
+}
+const ROLE_COL={inputs:'#1553b0',outputs:'#137a3e',dashboard:'#9a5a00',assumptions:'#6b4fc9',contents:'#9aa4b0'};
+function renderMap(d, body){
+  const layers={}; d.sheets.forEach(s=>{ (layers[s.layer]=layers[s.layer]||[]).push(s); });
+  const L=Object.keys(layers).map(Number).sort((a,b)=>a-b); const maxN=Math.max(...L.map(l=>layers[l].length));
+  const nw=118, nh=34, gx=48, gy=10, W=L.length*(nw+gx)+20, H=maxN*(nh+gy)+40, pos={};
+  L.forEach((l,i)=>{ const col=layers[l].sort((a,b)=>b.formulas-a.formulas); const h=col.length*(nh+gy); col.forEach((s,j)=>{ pos[s.sheet]={x:10+i*(nw+gx), y:24+(H-24-h)/2+j*(nh+gy)}; }); });
+  const maxE=Math.max(...d.edges.map(e=>e.refs),1);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="${Math.max(W,600)}" style="font-family:-apple-system,Segoe UI,Arial">`;
+  L.forEach((l,i)=>{ svg+=`<text x="${10+i*(nw+gx)+nw/2}" y="13" font-size="9.5" fill="#9aa4b0" text-anchor="middle">слой ${l}</text>`; });
+  d.edges.slice(0,70).forEach(e=>{ const a=pos[e.from], b=pos[e.to]; if(!a||!b) return; const x1=a.x+nw,y1=a.y+nh/2,x2=b.x,y2=b.y+nh/2, mx=(x1+x2)/2; const back=x2<=x1;
+    svg+=`<path d="M${x1},${y1} C${mx+(back?80:0)},${y1} ${mx-(back?80:0)},${y2} ${x2},${y2}" fill="none" stroke="${back?'#e8b04a':'#b3c8ea'}" stroke-width="${(0.8+4*Math.sqrt(e.refs/maxE)).toFixed(1)}" opacity=".75"><title>${esc(e.from)} → ${esc(e.to)}: ${e.refs} ссылок</title></path>`; });
+  d.sheets.forEach(s=>{ const p=pos[s.sheet]; if(!p) return; const c=ROLE_COL[s.role]||'#4d5866';
+    svg+=`<g><title>${esc(s.sheet)} · ${s.formulas} формул · допущений ${s.inputs} · расчётных строк ${s.calc}</title><rect x="${p.x}" y="${p.y}" width="${nw}" height="${nh}" rx="6" fill="#fff" stroke="${c}" stroke-width="1.4"/>
+      <text x="${p.x+7}" y="${p.y+14}" font-size="10.5" font-weight="700" fill="#1c2733">${esc(s.sheet.length>17?s.sheet.slice(0,16)+'…':s.sheet)}</text>
+      <text x="${p.x+7}" y="${p.y+27}" font-size="9" fill="${c}">${s.role} · ${s.formulas.toLocaleString('ru-RU')} ф. · ${s.inputs} доп.</text></g>`; });
+  svg+='</svg>';
+  const mt=`<table class="t"><tr><th>Метрика</th><th>Ячейка</th><th style="text-align:right">Влияющих допущений</th><th style="text-align:right">Доля вне Inputs</th><th>Где лежат драйверы</th></tr>${d.metrics.map(m=>`<tr><td>${esc(m.metric)}</td><td class="mono">${esc(m.ref)}</td><td class="n">${m.upstream_inputs}</td><td class="n"><b>${m.outside_inputs_share==null?'—':(m.outside_inputs_share*100).toFixed(0)+'%'}</b></td><td>${Object.entries(m.by_sheet).slice(0,5).map(([k,v])=>`<span class="pill r-calc">${esc(k)} ${v}</span>`).join('')}</td></tr>`).join('')}</table>`;
+  const cls=d.classes_total||{};
+  add(el(`<div class="chart"><h4>Карта модели · слои листов от источников к итогам (наведите на лист или связь)</h4>
+    <div class="kpis"><div class="kpi"><b>${d.sheets.length}</b><span>листов</span></div><div class="kpi"><b>${(cls.input||0)+(cls.mixed||0)}</b><span>строк-допущений</span></div><div class="kpi"><b>${cls.calc||0}</b><span>расчётных строк</span></div><div class="kpi"><b>${cls.link||0}</b><span>строк-ссылок</span></div></div>
+    <div style="overflow-x:auto">${svg}</div><div class="legend"><span><i style="background:#b3c8ea"></i>поток вперёд</span><span><i style="background:#e8b04a"></i>обратная связь (цикл между листами)</span></div>
+    <h4 style="margin-top:10px">Откуда берутся ключевые метрики</h4>${mt}</div>`), body);
+}
+function renderAudit(d, body){
+  add(el(`<div class="chart"><h4>Предпроверка модели · ${d.total} замечаний${d.iterative_calc?' · в модели циклические ссылки (итеративный расчёт)':''}</h4>
+    <div>${Object.entries(d.summary).map(([k,v])=>`<span class="pill r-calc">${esc(k)}: ${v}</span>`).join('')}</div>
+    <table class="t"><tr><th>Уровень</th><th>Тип</th><th>Где</th><th>Что</th></tr>${d.findings.slice(0,40).map(f=>`<tr><td><span class="lvl ${f.level}">${f.level==='critical'?'критично':f.level==='warning'?'важно':'инфо'}</span></td><td>${esc(f.type)}</td><td class="mono">${esc(f.where)}</td><td>${esc(f.text)}</td></tr>`).join('')}</table></div>`), body);
+}
+function renderTornado(d, body){
+  const rows=d.drivers; if(!rows.length){ add(el('<div class="sys">Влияющих допущений не найдено</div>'), body); return; }
+  const W=660, L=230, R=20, rh=26, H=rows.length*rh+30; const mx=Math.max(...rows.map(r=>Math.abs(r.delta)));
+  const cx=L+(W-L-R)/2, sc=(W-L-R)/2/mx;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:520px;font-family:-apple-system,Segoe UI,Arial">`;
+  svg+=`<line x1="${cx}" x2="${cx}" y1="6" y2="${H-14}" stroke="#1c2733"/>`;
+  rows.forEach((r,i)=>{ const y=10+i*rh, w=Math.abs(r.delta)*sc, x=r.delta<0?cx-w:cx;
+    const lab=(r.label||'').length>30?(r.label||'').slice(0,29)+'…':(r.label||'');
+    svg+=`<g><title>${esc(r.label)} · ${esc(r.sheet)}!${r.row} · Δ ${fmt(r.delta)}</title><text x="${L-8}" y="${y+8}" font-size="10.5" text-anchor="end" fill="#1c2733">${esc(lab)}</text>
+      <text x="${L-8}" y="${y+18}" font-size="8.5" text-anchor="end" fill="#9aa4b0" font-family="monospace">${esc(r.sheet.length>22?r.sheet.slice(0,21)+'…':r.sheet)}!${r.row}</text>
+      <rect x="${x}" y="${y}" width="${Math.max(w,1)}" height="${rh-8}" rx="3" fill="${r.role==='inputs'?'#1665d8':'#e8940a'}"/>
+      <text x="${r.delta<0?cx+4:cx-4}" y="${y+12}" font-size="9.5" font-family="monospace" text-anchor="${r.delta<0?'start':'end'}" fill="#4d5866">${fmt(r.delta)}</text></g>`; });
+  svg+='</svg>';
+  add(el(`<div class="chart"><h4>Ключевые драйверы · ${esc(d.metric)} (${esc(d.aggregate)}${d.base_year?', '+d.base_year:''}, база ${fmt(d.base)}) · шок ${d.shock_pct}% к каждому</h4>${svg}
+    <div class="legend"><span><i style="background:#1665d8"></i>лист Inputs</span><span><i style="background:#e8940a"></i>другие листы модели</span></div></div>`), body);
+}
+function renderCov(d, body){
+  const years=[...new Set(d.rules.flatMap(r=>Object.keys(r.years)))].sort();
+  add(el(`<div class="chart"><h4>Ковенанты · ${esc(d.scenario)}</h4><table class="t"><tr><th>Ковенант</th>${years.map(y=>`<th style="text-align:right">${y}</th>`).join('')}<th>Минимальный запас</th></tr>
+    ${d.rules.map(r=>`<tr><td>${esc(r.rule)}<br><span class="mono">${esc(r.ref)}</span></td>${years.map(y=>{const x=r.years[y]; return x?`<td class="n ${x.ok?'ok':'bad'}" title="запас ${x.headroom_pct}%">${fmt(x.value)}</td>`:'<td></td>';}).join('')}<td class="n">${r.worst?`${r.worst.headroom_pct}% (${r.worst.year})`:'—'}</td></tr>`).join('')}</table></div>`), body);
+}
+function renderHeadroom(d, body){
+  add(el(`<div class="chart"><h4>Запас прочности · ${esc(d.rule)} · база ${fmt(d.base)}${d.base_year?' ('+d.base_year+')':''}${d.already_breached?' · <span class="bad">уже нарушен в базе</span>':''}</h4>
+    <table class="t"><tr><th>Драйвер</th><th style="text-align:right">Изменение до пробоя</th></tr>${d.drivers.map(x=>`<tr><td>${esc(x.driver)}</td><td class="n">${x.change_pct!=null?`<b>${x.change_pct>0?'+':''}${fmt(x.change_pct)}%</b>`:esc(x.note||x.error||'—')}</td></tr>`).join('')}</table></div>`), body);
+}
+function renderHist(d, body){
+  const v=d.values; if(!v||!v.length) return; const lo=Math.min(...v), hi=Math.max(...v), nb=20, bw=(hi-lo)/nb||1;
+  const bins=Array(nb).fill(0); v.forEach(x=>bins[Math.min(nb-1,Math.floor((x-lo)/bw))]++); const mxb=Math.max(...bins);
+  const W=640,H=180,L=36,B=24; let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:480px;font-family:monospace">`;
+  const X=x=>L+(x-lo)/(hi-lo||1)*(W-L-10);
+  bins.forEach((b,i)=>{ const x0=lo+i*bw, bad=d.threshold!=null && !(d.op==='>='?x0+bw/2>=d.threshold:d.op==='<='?x0+bw/2<=d.threshold:d.op==='>'?x0+bw/2>d.threshold:x0+bw/2<d.threshold); const h=b/mxb*(H-B-14);
+    svg+=`<rect x="${X(x0)+1}" y="${H-B-h}" width="${Math.max(1,(W-L-10)/nb-2)}" height="${h}" fill="${bad?'#d4382f':'#1665d8'}" opacity=".85"><title>${fmt(x0)}–${fmt(x0+bw)}: ${b}</title></rect>`; });
+  if(d.threshold!=null){ const tx=X(d.threshold); svg+=`<line x1="${tx}" x2="${tx}" y1="6" y2="${H-B}" stroke="#d4382f" stroke-dasharray="4 3"/><text x="${tx+4}" y="14" font-size="10" fill="#d4382f">порог ${fmt(d.threshold)}</text>`; }
+  const bx=X(d.base); svg+=`<line x1="${bx}" x2="${bx}" y1="6" y2="${H-B}" stroke="#1c2733"/><text x="${bx+4}" y="28" font-size="10" fill="#1c2733">база</text>`;
+  [lo,(lo+hi)/2,hi].forEach(x=>{ svg+=`<text x="${X(x)}" y="${H-8}" font-size="9.5" fill="#77828f" text-anchor="middle">${fmt(+x.toPrecision(3))}</text>`; });
+  svg+='</svg>';
+  add(el(`<div class="chart"><h4>Монте-Карло · ${esc(d.metric)} (${esc(d.aggregate)}) · ${d.runs} прогонов</h4>
+    <div class="kpis"><div class="kpi"><b class="${d.breach_probability>0.1?'bad':'ok'}">${d.breach_probability!=null?(d.breach_probability*100).toFixed(1)+'%':'—'}</b><span>вероятность пробоя ковенанта ${d.threshold!=null?esc(d.op)+' '+fmt(d.threshold):''}</span></div>
+    <div class="kpi"><b>${fmt(d.p50)}</b><span>медиана (база ${fmt(d.base)})</span></div><div class="kpi"><b>${fmt(d.p5)} – ${fmt(d.p95)}</b><span>90% интервал</span></div></div>${svg}</div>`), body);
+}
+/* ── новые визуализации: кредитные инструменты ── */
+const pctS = v => v==null ? '—' : (v>0?'+':'')+fmt(v)+'%';
+function renderLender(d, body){
+  const s=d.summary||{}, c=d.capacity||{}, rows=d.rows||[];
+  const has=k=>rows.some(r=>r[k]!=null);
+  const cols=[['cfads','CFADS'],['debt_service','Обслуживание долга'],['dscr','DSCR'],['opening_debt','Долг на начало'],['llcr','LLCR'],['plcr','PLCR'],['nd_ebitda','ND/EBITDA'],['icr','ICR']].filter(([k])=>has(k));
+  const td=(k,v)=>{ const bad=(k==='dscr'&&v!=null&&v<d.targets.dscr)||(k==='llcr'&&v!=null&&v<d.targets.llcr); return `<td class="n ${bad?'bad':''}">${fmt(v)}</td>`; };
+  add(el(`<div class="chart"><h4>Метрики кредитора · ${esc(d.scenario)} · ставка ${fmt(d.rate_pct)}% · цель DSCR ${fmt(d.targets.dscr)}, LLCR ${fmt(d.targets.llcr)}</h4>
+    <div class="kpis"><div class="kpi"><b class="${s.min_dscr!=null&&s.min_dscr<d.targets.dscr?'bad':'ok'}">${fmt(s.min_dscr)}</b><span>min DSCR (${esc(s.min_dscr_period||'—')})</span></div>
+    <div class="kpi"><b>${fmt(s.avg_dscr)}</b><span>средний DSCR</span></div><div class="kpi"><b>${fmt(s.min_llcr)}</b><span>min LLCR (${esc(s.min_llcr_period||'—')})</span></div>
+    ${c.sculpted_capacity!=null?`<div class="kpi"><b class="${(c.spare_vs_dscr_pct||0)<0?'bad':'ok'}">${pctS(c.spare_vs_dscr_pct)}</b><span>долговая ёмкость при DSCR ${fmt(d.targets.dscr)}: ${fmt(c.sculpted_capacity)} vs долг ${fmt(c.current_debt)}</span></div>`:''}</div>
+    <table class="t"><tr><th>Период</th>${cols.map(([,t])=>`<th style="text-align:right">${t}</th>`).join('')}</tr>${rows.map(r=>`<tr><td>${esc(r.period)}</td>${cols.map(([k])=>td(k,r[k])).join('')}</tr>`).join('')}</table>
+    ${(d.notes||[]).length?`<div class="warn" style="margin-top:6px">${d.notes.map(esc).join('<br>')}</div>`:''}</div>`), body);
+}
+function renderMatrix(d, body){
+  add(el(`<div class="chart"><h4>Стресс-пакет банка · худшее значение по прогнозу (период) и изменение к базе</h4>
+    <table class="t heat"><tr><th>Сценарий</th>${d.columns.map(c=>`<th style="text-align:right">${esc(c.metric)}<br><span class="mono">${esc(c.rule||c.aggregate)}</span></th>`).join('')}</tr>
+    ${d.rows.map(r=>`<tr><td>${r.kind==='combined'?'<b>'+esc(r.scenario)+'</b>':esc(r.scenario)}${r.shocks&&r.shocks.length?`<small style="display:block;color:var(--muted);font-size:10.5px">${esc(r.shocks.slice(0,3).join('; '))}</small>`:''}</td>
+      ${r.error?`<td colspan="${d.columns.length}" class="bad">${esc(r.error)}</td>`:r.cells.map(c=>`<td class="c ${c.ok===false?'badc':c.ok===true?'okc':''}">${fmt(c.value)} <span style="color:var(--muted)">(${esc(c.period||'')})</span>${c.delta_pct!=null&&r.kind!=='base'?`<small>${pctS(c.delta_pct)}</small>`:''}</td>`).join('')}</tr>`).join('')}</table>
+    <div class="legend"><span><i style="background:#9fd8b3"></i>ковенант выполняется</span><span><i style="background:#f3a49d"></i>пробой</span></div></div>`), body);
+}
+function renderSafe(d, body){
+  const xs=d.x.values, ys=d.y.values, cw=74, ch=34, L=96, T=26, W=L+xs.length*cw+10, H=T+ys.length*ch+46;
+  const margin=v=>{ if(v==null) return null; const m=(v-d.threshold)/Math.abs(d.threshold||1); return d.op.startsWith('>')?m:-m; };
+  const col=v=>{ const m=margin(v); if(m==null) return '#eee'; if(m<0){ const a=Math.min(1,-m*4); return `rgba(212,56,47,${0.25+0.6*a})`; } const a=Math.min(1,m*3); return `rgba(31,163,86,${0.15+0.55*a})`; };
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;font-family:var(--mono)">`;
+  const rowsTop=[...ys].map((y,i)=>i).reverse();   // больший y — вверху
+  rowsTop.forEach((i,ri)=>{ const yv=ys[i];
+    svg+=`<text x="${L-8}" y="${T+ri*ch+ch/2+4}" font-size="10.5" text-anchor="end" fill="#4d5866">${yv>0?'+':''}${yv}%</text>`;
+    xs.forEach((xv,j)=>{ const c=d.grid[i][j], x=L+j*cw, y=T+ri*ch, base=(xv===0&&yv===0);
+      svg+=`<g><title>${esc(d.x.name)} ${xv}% · ${esc(d.y.name)} ${yv}% → ${fmt(c.value)} ${c.ok?'✓':'✗ пробой'}</title><rect x="${x+1}" y="${y+1}" width="${cw-2}" height="${ch-2}" rx="5" fill="${col(c.value)}" ${base?'stroke="#1c2733" stroke-width="2.5"':''}/>
+        <text x="${x+cw/2}" y="${y+ch/2+4}" font-size="11" text-anchor="middle" fill="#1c2733" font-weight="${base?800:500}">${fmt(c.value)}</text></g>`; }); });
+  xs.forEach((xv,j)=>{ svg+=`<text x="${L+j*cw+cw/2}" y="${T+ys.length*ch+16}" font-size="10.5" text-anchor="middle" fill="#4d5866">${xv>0?'+':''}${xv}%</text>`; });
+  svg+=`<text x="${L+xs.length*cw/2}" y="${H-6}" font-size="11" text-anchor="middle" fill="#1c2733" font-family="-apple-system,Segoe UI,Arial">→ ${esc(d.x.name)}</text>`;
+  svg+=`<text x="10" y="14" font-size="11" fill="#1c2733" font-family="-apple-system,Segoe UI,Arial">↑ ${esc(d.y.name)}</text></svg>`;
+  add(el(`<div class="chart"><h4>Карта безопасной зоны · ${esc(d.rule)} · ${esc(d.aggregate)} по прогнозу · база ${fmt(d.base)} (рамка — текущая точка)</h4>
+    <div class="kpis"><div class="kpi"><b class="${d.safe_share<0.5?'bad':'ok'}">${(d.safe_share*100).toFixed(0)}%</b><span>сочетаний шоков без пробоя</span></div></div>
+    <div style="overflow-x:auto">${svg}</div><div class="legend"><span><i style="background:#5fbf86"></i>ковенант выполняется (насыщенность — запас)</span><span><i style="background:#d4382f"></i>пробой</span></div></div>`), body);
+}
+function renderReverse(d, body){
+  if(!d.breach_found){ add(el(`<div class="chart"><h4>Обратный стресс-тест</h4><div>${esc(d.message||'')}</div></div>`), body); return; }
+  add(el(`<div class="chart"><h4>Обратный стресс-тест · минимальное совместное изменение до пробоя</h4>
+    <div class="kpis"><div class="kpi"><b>×${fmt(d.multiple)}</b><span>множитель неблагоприятного сценария</span></div>
+    <div class="kpi"><b class="${d.sigma_distance!=null&&d.sigma_distance<=1.5?'bad':'ok'}">${d.sigma_distance!=null?fmt(d.sigma_distance)+'σ':'—'}</b><span>правдоподобие: ${esc(d.plausibility||'нет σ')}</span></div></div>
+    <table class="t"><tr><th>Драйвер</th><th style="text-align:right">Изменение до пробоя</th><th style="text-align:right">σ</th></tr>${d.shocks.map(x=>`<tr><td>${esc(x.driver)}</td><td class="n"><b>${pctS(x.change_pct)}</b></td><td class="n">${fmt(x.sigma)}</td></tr>`).join('')}</table>
+    <div style="font-size:12px;color:var(--muted)">Нарушается: ${esc(d.binding.join('; '))}</div></div>`), body);
+}
+function renderCapacity(d, body){
+  add(el(`<div class="chart"><h4>Долговая ёмкость · драйвер ${esc(d.driver)}</h4>
+    <div class="kpis"><div class="kpi"><b class="${d.max_change_pct<0?'bad':'ok'}">${pctS(d.max_change_pct)}</b><span>${d.max_change_pct<0?'нужно снизить долг':'можно увеличить долг'} до границы ковенантов</span></div>
+    <div class="kpi"><b style="font-size:13px">${esc((d.binding_covenant||[]).join('; ')||'—')}</b><span>ограничивающий ковенант</span></div></div>
+    <table class="t"><tr><th>Ковенант</th><th style="text-align:right">База</th><th style="text-align:right">На границе</th></tr>${d.base.map((b,i)=>`<tr><td>${esc(b.rule)}</td><td class="n">${fmt(b.value)} (${esc(b.period)})</td><td class="n">${d.at_capacity[i]?fmt(d.at_capacity[i].value)+' ('+esc(d.at_capacity[i].period)+')':'—'}</td></tr>`).join('')}</table></div>`), body);
+}
+function renderExpert(d, body){
+  const CONF={high:'высокая',medium:'средняя',low:'низкая'};
+  const chg=a=> a.new ? Object.entries(a.new).map(([k,v])=>`${esc(k)}: ${fmt(v)}`).join(' · ') : esc(a.change||'0');
+  add(el(`<div class="chart"><div class="expert-head"><div class="av">🧑‍🏭</div><div><h4 style="margin:0;color:var(--text);font-size:13.5px">Отраслевой эксперт · ${esc(d.title)}</h4>
+    <div style="font-size:12.5px;color:#4d5866;margin-top:3px">${esc(d.summary||'')}</div></div></div>
+    <table class="t" style="margin-top:8px"><tr><th>Поле модели</th><th>Новое значение / изменение</th><th>Уверенность</th><th>Обоснование</th></tr>
+    ${d.assumptions.map(a=>`<tr><td>${esc(a.field)}<br><span class="mono">${esc(a.ref)}</span> <span style="color:var(--muted)">${esc(a.unit||'')}</span></td><td class="n"><b>${chg(a)}</b></td><td><span class="conf ${esc(a.confidence)}">${CONF[a.confidence]||esc(a.confidence||'—')}</span></td><td style="font-size:12px">${esc(a.rationale)}</td></tr>`).join('')}</table>
+    ${d.key_risks&&d.key_risks.length?`<div style="font-size:12px;margin-top:4px"><b>Допущения сценария:</b> ${d.key_risks.map(esc).join(' · ')}</div>`:''}
+    ${d.warnings&&d.warnings.length?`<div class="warn" style="margin-top:6px">${d.warnings.map(esc).join('<br>')}</div>`:''}</div>`), body);
+}
+
+
+/* ── факторы, смысловая карта, анализ зависимостей ── */
+function renderFactors(d, body){
+  const rows=(d.factors||[]).filter(x=>x.share!=null); if(!rows.length) return;
+  const mx=Math.max(...rows.map(x=>Math.abs(x.delta_pct||0)),0.001);
+  add(el(`<div class="chart"><h4>Факторы · ${esc(d.metric)} (база ${fmt(d.base)}) · изменение метрики при снижении каждого фактора на ${Math.abs(d.shock_pct)}%</h4>
+    <table class="t">${rows.map(x=>`<tr title="${esc((x.examples||[]).join('; '))}"><td style="width:34%"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${FCOL[x.factor]||'#999'};margin-right:6px"></span><b>${esc(x.name)}</b><br><span style="color:var(--muted);font-size:11px">${x.rows} строк · ${esc((x.examples||[]).slice(0,2).join('; ').slice(0,70))}</span></td>
+      <td><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;background:#f0f2f5;border-radius:4px;height:14px;position:relative"><div style="position:absolute;${(x.delta_pct||0)<0?'right:50%':'left:50%'};width:${Math.abs(x.delta_pct||0)/mx*50}%;height:14px;border-radius:4px;background:${FCOL[x.factor]||'#999'}"></div><div style="position:absolute;left:50%;top:-2px;bottom:-2px;border-left:1px solid #1c2733"></div></div>
+      <span class="mono" style="width:64px;text-align:right">${pctS(x.delta_pct)}</span></div></td><td class="n" style="width:60px"><b>${(x.share*100).toFixed(0)}%</b></td></tr>`).join('')}</table>
+    <div class="legend"><span>доля — вклад фактора в суммарную чувствительность метрики</span></div></div>`), body);
+}
+function renderSemMap(d, body){
+  d={...d, links:d.links.filter(l=>l.share>=0.01)};
+  const fs=[...new Set(d.links.map(l=>l.factor))]; const ms=d.metrics; if(!fs.length) return;
+  const fid={}; d.links.forEach(l=>fid[l.factor]=l.factor_id);
+  const tot={}; d.links.forEach(l=>tot[l.factor]=(tot[l.factor]||0)+l.share); fs.sort((a,b)=>tot[b]-tot[a]);
+  const W=700, rh=30, H=Math.max(fs.length, ms.length*2)*rh+30, xl=230, xr=W-200;
+  const fy=i=>20+i*rh+rh/2, my=j=>20+(j+0.5)*(H-30)/ms.length;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:560px;font-family:-apple-system,Segoe UI,Arial">`;
+  d.links.forEach(l=>{ const i=fs.indexOf(l.factor), j=ms.indexOf(l.metric); if(l.share<0.01) return;
+    const y1=fy(i), y2=my(j), w=Math.max(1.2, l.share*28);
+    svg+=`<path d="M${xl},${y1} C${(xl+xr)/2},${y1} ${(xl+xr)/2},${y2} ${xr},${y2}" fill="none" stroke="${FCOL[l.factor_id]||'#999'}" stroke-width="${w.toFixed(1)}" opacity="${l.market?0.6:0.3}" ${l.market?'':'stroke-dasharray="6 4"'}><title>${esc(l.factor)} → ${esc(l.metric)}: ${(l.share*100).toFixed(0)}% чувствительности, ${pctS(l.delta_pct)} при −${Math.abs(d.shock_pct)}%</title></path>`; });
+  fs.forEach((f,i)=>{ svg+=`<g><rect x="6" y="${fy(i)-11}" width="${xl-10}" height="22" rx="6" fill="${FCOL[fid[f]]||'#999'}1f" stroke="${FCOL[fid[f]]||'#999'}"/><text x="14" y="${fy(i)+4}" font-size="11.5" fill="#1c2733">${esc(f.length>30?f.slice(0,29)+'…':f)}</text></g>`; });
+  ms.forEach((m,j)=>{ svg+=`<g><rect x="${xr+4}" y="${my(j)-16}" width="186" height="32" rx="8" fill="#1c2733"/><text x="${xr+14}" y="${my(j)+5}" font-size="12.5" font-weight="700" fill="#fff">${esc(m.length>22?m.slice(0,21)+'…':m)}</text></g>`; });
+  svg+='</svg>';
+  add(el(`<div class="chart"><h4>Смысловая карта · какие экономические факторы определяют метрики (толщина — доля чувствительности)</h4><div style="overflow-x:auto">${svg}</div>
+    <div class="legend"><span>сплошная — рыночный фактор</span><span>пунктир — структурный (налоги, долг, оборотный капитал)</span></div></div>`), body);
+}
+function renderDeps(d, body){
+  add(el(`<div class="chart"><h4>Анализ зависимостей · отрасль: ${esc(d.industry)}${d.cached?' · <span style="color:var(--green)">из кэша модели</span> <a href="#" onclick="direct(\'deps\', true);return false">↻ пересчитать</a>':''}</h4>
+    <ul style="margin:4px 0 4px 18px;line-height:1.6;font-size:12.8px">${d.findings.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
+    ${d.couplings&&d.couplings.length?`<h4 style="margin-top:8px">Сцепки факторов — найдены пересчётом на любой глубине формул</h4><table class="t"><tr><th>Показатель</th><th>Зависит от (доля)</th><th>Что это значит</th><th>Цепочка в модели</th></tr>${d.couplings.map(c=>`<tr><td><span class="lvl ${c.kind==='attention'?'warning':'info'}">${c.kind==='attention'?'внимание':'механика'}</span><br><b title="${esc((c.members||[]).join('; '))}">${esc(c.name)}</b><br><span class="mono" title="${esc(c.formula||'')}">${esc(c.ref)}</span></td><td style="font-size:12px">${esc(c.from.join(', '))}</td><td style="font-size:12px">${esc(c.note)}</td><td style="font-size:11.5px;color:#4d5866">${c.chain?esc(c.chain.join(' → ')):'—'}</td></tr>`).join('')}</table>`:''}</div>`), body);
+}
+
+/* ── модальные окна ── */
+function modal(title, bodyHtml, okText, onOk){
+  const m=el(`<div class="modal-bg"><div class="modal"><div class="modal-h"><h2>${title}</h2><button class="x">×</button></div><div class="modal-b">${bodyHtml}</div>
+    <div class="modal-f"><button class="btn" data-k="cancel">Отмена</button><button class="primary" data-k="ok">${okText}</button></div></div></div>`);
+  document.body.appendChild(m);
+  const close=()=>m.remove();
+  m.querySelector('.x').onclick=close; m.querySelector('[data-k=cancel]').onclick=close;
+  m.onclick=e=>{ if(e.target===m) close(); };
+  m.querySelector('[data-k=ok]').onclick=()=>{ if(onOk(m)!==false) close(); };
+  return m;
+}
+async function getDefaults(){ if(!DEFAULTS){ DEFAULTS=await (await fetch('/api/defaults/'+SID)).json(); } return DEFAULTS; }
+const itemHtml=(x,checked)=>`<label class="it"><input type="checkbox" ${checked?'checked':''} data-v='${esc(JSON.stringify({sheet:x.sheet,row:x.row,name:x.name||x.label}))}'><span class="mono">${esc(x.sheet)}!${x.row}</span><span>${esc(x.name||x.label)}</span><span class="u">${esc(x.unit||'')}</span></label>`;
+function searchBox(m, sel, onPick, only_inputs){
+  const inp=m.querySelector(sel+' input.s'), res=m.querySelector(sel+' .sres'); let t=null;
+  inp.oninput=()=>{ clearTimeout(t); t=setTimeout(async()=>{ const q=inp.value.trim(); if(q.length<2){ res.innerHTML=''; return; }
+    const r=await (await fetch(`/api/search/${SID}?q=${encodeURIComponent(q)}&only_inputs=${only_inputs?'true':'false'}&limit=8`)).json();
+    res.innerHTML=`<div class="pick">${r.rows.map(x=>`<div class="it" data-v='${esc(JSON.stringify({sheet:x.sheet,row:x.row,name:x.label.slice(0,60),unit:x.unit}))}'><span class="mono">${esc(x.sheet)}!${x.row}</span><span>${esc(x.label)}</span><span class="u">${esc(x.kind)} · ${x.dependents} завис.</span></div>`).join('')||'<div class="it">ничего не найдено</div>'}</div>`;
+    res.querySelectorAll('.it[data-v]').forEach(n=>n.onclick=()=>{ onPick(JSON.parse(n.dataset.v)); res.innerHTML=''; inp.value=''; });
+  },250); };
+}
+const checked = (m, sel) => [...m.querySelectorAll(sel+' input[type=checkbox]:checked')].map(c=>JSON.parse(c.dataset.v));
+function rulesEditor(rules){
+  return `<table class="t rules"><tr><th></th><th>Ковенант</th><th>Ячейка</th><th>Условие</th><th>Порог</th></tr>${rules.map((r,i)=>ruleRow(r,i)).join('')}</table>`;
+}
+const ruleRow=(r)=>`<tr data-sheet="${esc(r.sheet)}" data-row="${r.row}"><td><input type="checkbox" ${r.on===false?'':'checked'}></td><td><input type="text" class="rn" value="${esc(r.name||r.label||'')}"></td><td class="mono">${esc(r.sheet)}!${r.row}</td>
+  <td><select class="ro"><option ${r.op==='>='?'selected':''}>&gt;=</option><option ${r.op==='<='?'selected':''}>&lt;=</option></select></td><td><input type="number" step="0.05" class="rt" value="${r.threshold??1}"></td></tr>`;
+const readRules = m => [...m.querySelectorAll('.rules tr[data-sheet]')].filter(tr=>tr.querySelector('input[type=checkbox]').checked).map(tr=>({
+  sheet:tr.dataset.sheet,row:+tr.dataset.row,name:tr.querySelector('.rn').value,op:tr.querySelector('.ro').value.replace('&gt;','>').replace('&lt;','<'),threshold:parseFloat(tr.querySelector('.rt').value)}));
+
+async function openKpki(){
+  if(!SID||running) return;
+  const D=await getDefaults();
+  const m=modal('📑 Заключение для КПКИ', `
+    <div style="font-size:12.5px;color:#4d5866;line-height:1.55">Фиксированный сценарий — одинаковые шаги для каждой модели: <b>предпроверка → ковенанты → ключевые драйверы → стресс-пакет банка → запас прочности → обратный стресс → Монте-Карло → заключение</b>. LLM пишет только резюме, риски и рекомендации по готовым цифрам; таблицы — из расчётов. Результат — в Word.</div>
+    <div class="fld"><label class="h">Ковенанты (первый — основной для драйверов и Монте-Карло)</label><div id="kr">${rulesEditor(D.rules)}</div>
+      <div id="ks" style="margin-top:6px"><input type="text" class="s" placeholder="+ добавить метрику: начните вводить (DSCR, долг, ICR…)" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px"><div class="sres"></div></div></div>
+    <div style="display:flex;gap:12px"><div class="fld" style="flex:1"><label class="h">Прогонов Монте-Карло</label><input type="number" id="kmc" value="80" min="20" max="400"></div>
+      <div class="fld" style="flex:1"><label class="h">Допущений для поиска драйверов</label><input type="number" id="kmax" value="40" min="10" max="120"></div></div>`,
+    '▶ Сформировать заключение', m=>{
+      const rules=readRules(m); if(!rules.length){ alertBox(m,'Отметьте хотя бы один ковенант'); return false; }
+      runKpki(rules, +m.querySelector('#kmc').value||80, +m.querySelector('#kmax').value||40);
+    });
+  searchBox(m,'#ks', x=>{ m.querySelector('#kr table').insertAdjacentHTML('beforeend', ruleRow({...x, op:'>=', threshold:1.2})); }, false);
+}
+function alertBox(m, t){ let w=m.querySelector('.modal-b .warn.al'); if(!w){ w=el('<div class="warn al"></div>'); m.querySelector('.modal-b').prepend(w); } w.textContent=t; }
+async function runKpki(rules, mc, maxc){
+  running=true; $('#send').disabled=true;
+  add(el(`<div class="msg-user">📑 Заключение для КПКИ: ${esc(rules.map(r=>r.name+' '+r.op+' '+r.threshold).join('; '))}</div>`));
+  const ctx=newRun('Заключение для КПКИ', 'фиксированный сценарий');
+  await streamInto('/api/kpki', {session_id:SID, rules, mc_runs:mc, max_candidates:maxc, ...llm()}, ctx);
+  running=false; $('#send').disabled=false; chipsRender();
+}
+
+const NEWS_SAMPLES=['ОПЕК+ договорилась о дополнительном сокращении добычи на 1 млн барр./сут. до конца 2027 года',
+  'ЦБ неожиданно повысил ключевую ставку на 300 б.п., рынок ждёт жёсткую ДКП ещё 2 года',
+  'Рубль укрепился до 75 за доллар на фоне притока экспортной выручки',
+  'ЕС ввёл потолок цен на российские нефтепродукты на $15 ниже рынка'];
+async function openExpert(){
+  if(!SID||running) return;
+  const D=await getDefaults();
+  const m=modal('🧑‍🏭 Отраслевой эксперт', `
+    <div style="font-size:12.5px;color:#4d5866;line-height:1.55">Отдельная LLM-роль отраслевого эксперта получает новость и выбранные поля модели с текущими значениями, предлагает новые значения по каждому полю с обоснованием — и <b>сразу прогоняет стресс-тест</b> текущей модели (сценарий эксперта и ×1,5) с проверкой ковенантов.</div>
+    <div class="fld"><label class="h">Новость или событие</label><textarea id="en" placeholder="Вставьте текст новости…"></textarea>
+      <div class="samples">${NEWS_SAMPLES.map(t=>`<span class="chip">${esc(t.slice(0,48))}…</span>`).join('')}</div></div>
+    <div class="fld"><label class="h">Отрасль (необязательно)</label><input type="text" id="ei" placeholder="например: нефтепереработка, энергетика"></div>
+    <div class="fld" id="ef"><label class="h">Поля-допущения для эксперта (до 15)</label><div class="pick" id="efl">${D.fields.map((x,i)=>itemHtml(x,i<6)).join('')||'<div class="it">драйверы не найдены — добавьте через поиск</div>'}</div>
+      <div style="margin-top:6px"><input type="text" class="s" placeholder="+ найти поле: цена, курс, ставка, объём, тариф…" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px"><div class="sres"></div></div></div>
+    <div class="fld"><label class="h">Ковенанты для проверки в стрессе</label>${rulesEditor(D.rules)}</div>`,
+    '▶ Спросить эксперта и прогнать стресс', m=>{
+      const news=m.querySelector('#en').value.trim(); const fields=checked(m,'#efl');
+      if(!news){ alertBox(m,'Введите текст новости'); return false; } if(!fields.length){ alertBox(m,'Выберите хотя бы одно поле'); return false; }
+      runExpert(news, m.querySelector('#ei').value.trim()||null, fields.slice(0,15), readRules(m));
+    });
+  m.querySelectorAll('.samples .chip').forEach((c,i)=>c.onclick=()=>{ m.querySelector('#en').value=NEWS_SAMPLES[i]; });
+  searchBox(m,'#ef', x=>{ m.querySelector('#efl').insertAdjacentHTML('afterbegin', itemHtml(x,true)); }, true);
+}
+async function runExpert(news, industry, fields, rules){
+  running=true; $('#send').disabled=true;
+  add(el(`<div class="msg-user">🧑‍🏭 Отраслевой эксперт: «${esc(news)}» · полей: ${fields.length}</div>`));
+  const ctx=newRun('Отраслевой эксперт', 'оценка допущений + стресс-тест');
+  await streamInto('/api/expert', {session_id:SID, news, industry, fields, rules, metrics:rules.map(r=>({sheet:r.sheet,row:r.row,name:r.name})), ...llm()}, ctx);
+  running=false; $('#send').disabled=false; chipsRender();
+}
+
+/* ── демо-прогон на синтетических данных (для тура, без модели и LLM) ── */
+async function demoRun(){
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  add(el(`<div class="msg-user">Оцени устойчивость заёмщика к падению цен и укреплению рубля <span class="demo-tag">ДЕМО</span></div>`));
+  const ctx=newRun('Агент работает', 'пример на демо-данных'); ctx.head.querySelector('.state').insertAdjacentHTML('afterend','<span class="demo-tag">демо-данные</span>');
+  const plan={goal:'Устойчивость к ценам и курсу',steps:[{title:'Найти ковенанты и драйверы',status:'in_progress',note:''},{title:'Стресс-пакет банка',status:'pending',note:''},{title:'Карта безопасной зоны цена × курс',status:'pending',note:''},{title:'Вывод',status:'pending',note:''}]};
+  handle('plan',plan,ctx); await sleep(700);
+  handle('think',{text:'Ищу строки ND/EBITDA и цену нефти по всей модели, затем проверю, что шок дойдёт до метрики.'},ctx);
+  handle('tool_start',{id:'d1',name:'search_rows',args:{query:'Urals'}},ctx); await sleep(600);
+  handle('tool_end',{id:'d1',name:'search_rows',ok:true,seconds:0.1,result:{found:3,rows:[{sheet:'Dashboard',row:248,label:'Цена Urals, $/барр.',unit:'$/bbl',kind:'input',values:{'2026':62,'2027':64,'2028':65}}]}},ctx);
+  plan.steps[0].status='done'; plan.steps[0].note='ND/EBITDA — Dashboard!33; драйверы: Urals, курс'; plan.steps[1].status='in_progress'; handle('plan',plan,ctx); await sleep(600);
+  handle('tool_start',{id:'d2',name:'stress_pack',args:{}},ctx); await sleep(900);
+  const cells=(v,p,ok,dp)=>({value:v,period:p,ok,delta_pct:dp});
+  handle('matrix',{columns:[{metric:'ND/EBITDA',rule:'<= 3',aggregate:'max'},{metric:'DSCR',rule:'>= 1.2',aggregate:'min'}],rows:[
+    {scenario:'База',kind:'base',shocks:[],cells:[cells(2.82,'2026',true),cells(1.60,'2026',true)]},
+    {scenario:'Urals · умеренный',kind:'single',shocks:['Urals −10%'],cells:[cells(3.06,'2026',false,8.3),cells(1.29,'2026',true,-19)]},
+    {scenario:'Курс · умеренный',kind:'single',shocks:['Курс −10%'],cells:[cells(2.97,'2026',true,5.2),cells(1.41,'2026',true,-12)]},
+    {scenario:'Комбинированный · умеренный',kind:'combined',shocks:['Urals −10%','Курс −10%'],cells:[cells(3.36,'2026',false,19),cells(0.83,'2026',false,-48)]}]},ctx);
+  handle('tool_end',{id:'d2',name:'stress_pack',ok:true,seconds:3.9,result:{rows:[1,2,3,4],breach_scenarios:['a','b']}},ctx);
+  plan.steps[1].status='done'; plan.steps[2].status='in_progress'; handle('plan',plan,ctx); await sleep(600);
+  handle('tool_start',{id:'d3',name:'safe_zone',args:{}},ctx); await sleep(900);
+  const xs=[-30,-20,-10,0,10], ys=[-30,-20,-10,0,10];
+  const grid=ys.map(y=>xs.map(x=>{ const v=+(2.82*(1-0.0085*x)*(1-0.0055*y)).toFixed(2); return {value:v,ok:v<=3}; }));
+  handle('safezone',{rule:'ND/EBITDA <= 3',aggregate:'max',base:2.82,op:'<=',threshold:3,x:{name:'Urals, %',values:xs},y:{name:'Курс USD/RUB, %',values:ys},grid,safe_share:grid.flat().filter(c=>c.ok).length/25},ctx);
+  handle('tool_end',{id:'d3',name:'safe_zone',ok:true,seconds:6.3,result:{grid,safe_share:0.36}},ctx);
+  plan.steps[2].status='done'; plan.steps[3].status='done'; handle('plan',plan,ctx); await sleep(400);
+  handle('answer',{text:'**Вывод (демо):** заёмщик чувствителен к цене Urals: умеренный шок −10% уже нарушает ковенант ND/EBITDA ≤ 3 в 2026 году; совместное снижение Urals и курса на 10% даёт DSCR 0,83.\n\n| Сценарий | ND/EBITDA | DSCR |\n|---|---|---|\n| База | 2,82 | 1,60 |\n| Комбинированный | 3,36 | 0,83 |\n\n_Это пример на демо-данных — загрузите модель, чтобы агент посчитал по ней._'},ctx);
+  ctx.head.innerHTML='<span style="color:var(--green)">✓</span><span>Готово</span><span class="demo-tag">демо-данные</span>';
+}
+
+/* ── демо-тур (CJM кредитного аналитика) ── */
+const CJM=[['📂','Загрузка','копия модели, индекс, граф'],['🧭','Экспресс-анализ','карточка и карта модели'],['🔍','Предпроверка','ошибки, хардкоды, разные DSCR'],
+  ['💬','Исследование','любой вопрос — агент планирует шаги'],['⚡','Стресс и эксперт','пакет банка, карта зоны, новость'],['📑','Заключение КПКИ','фиксированный сценарий'],['⬇','Выгрузка','Word, Excel, Markdown']];
+const TOUR=[
+  {sel:'#provider', stage:'Настройка', title:'Выберите «мозг» агента', html:'<p>OpenAI — для обезличенных моделей, <b>GigaChat</b> — для работы во внутреннем контуре с реальными данными клиента. Офлайн-сценарий — проверка без LLM.</p>'},
+  {sel:'#planLbl', stage:'Настройка', title:'Harness с планированием', html:'<p>Агент сначала строит план из 3–7 шагов, затем сам выбирает инструменты (их 24) и отмечает шаги. Выключите для коротких вопросов.</p>'},
+  {sel:'#drop', stage:'1 · Загрузка', title:'Загрузите модель Excel', html:'<p>Работаем с копией — исходный файл не меняется. За секунды строится индекс листов, шапки периодов (годы, кварталы, месяцы) и граф зависимостей всех формул.</p>'},
+  {sel:'#eng', stage:'1 · Загрузка', title:'Живой пересчёт в Excel', html:'<p>Стрессы считаются настоящим Excel (xlwings) с итерациями до сходимости циклических ссылок. После каждого сценария модель восстанавливается.</p>'},
+  {sel:'#semBox', stage:'2 · Экспресс-анализ', title:'Смысл модели', html:'<p>Каждая строка, влияющая на метрики, получает понятное название, описание и <b>экономический фактор</b>: цены, объёмы, курс, ставки, OPEX, CAPEX, налоги, долг + отраслевые подфакторы. Агент отвечает языком факторов, а не ячеек. Нажмите на фактор, чтобы увидеть его строки.</p>'},
+  {sel:'#btnMap', stage:'2 · Экспресс-анализ', title:'Карта модели', html:'<p>Слои листов от источников к итогам, потоки ссылок и <b>доля драйверов вне Inputs</b> — сразу видно, где «спрятаны» допущения. Без LLM, мгновенно.</p>'},
+  {sel:'#btnAudit', stage:'3 · Предпроверка', title:'Предпроверка модели', html:'<p>#REF!, числа вместо формул в прогнозе, формулы, выбивающиеся из ряда, внешние ссылки, <b>одна метрика с разными значениями на разных листах</b>, MIN по факту+прогнозу — с адресами ячеек.</p>'},
+  {sel:'#q', stage:'4 · Исследование', title:'Спросите что угодно', html:'<p>Агент сам найдёт листы и строки, проверит связь драйвера с метрикой и выберет инструменты. Сложные запросы раскладываются на цепочку:</p><ul><li>«оцени устойчивость» → ковенанты → драйверы → стресс-пакет → запас прочности</li><li>«сколько долга выдержит» → CFADS/DSCR/LLCR → долговая ёмкость</li><li>«задержка запуска на год» → сдвиг ряда во времени</li></ul>'},
+  {sel:'#wrap', stage:'4 · Исследование', title:'Как выглядит ответ', html:'<p>План с отметками, карточки инструментов, графики и таблицы — всё проверяемо, с адресами ячеек. Сейчас покажу пример на демо-данных.</p>', action:'demo'},
+  {sel:'#btnExpert', stage:'5 · Стресс и эксперт', title:'Отраслевой эксперт', html:'<p>Вставьте новость («ОПЕК+ сокращает добычу», «ЦБ поднял ставку»), выберите поля модели — эксперт-LLM оценит новые значения с обоснованием и <b>сразу прогонит стресс</b> с проверкой ковенантов.</p>'},
+  {sel:'#btnKpki', stage:'6 · Заключение КПКИ', title:'Заключение одной кнопкой', html:'<p>Фиксированный, воспроизводимый сценарий: предпроверка → ковенанты → драйверы → стресс-пакет → запас прочности → обратный стресс → Монте-Карло. LLM пишет резюме и рекомендации, таблицы — из расчётов. Выгрузка в <b>Word</b>.</p>'},
+  {sel:'#aside', stage:'7 · Выгрузка', title:'Всё сохраняется', html:'<p>Каждый ответ — в Word или Markdown, стресс-прогоны — в Excel. Карточка модели слева остаётся под рукой весь диалог.</p>'},
+];
+let tourI=-1, tourEls=null;
+function tourStart(){
+  const m=el(`<div class="modal-bg" style="z-index:1003"><div class="modal" style="max-width:900px"><div class="modal-h"><h2>Копилот ДККК · путь кредитного аналитика</h2><button class="x">×</button></div>
+    <div class="modal-b"><div style="font-size:13px;color:#4d5866;line-height:1.6">От загрузки модели клиента до заключения для КПКИ — за минуты, с адресами ячеек и пересчётом в Excel. Нажмите на этап или пройдите тур.</div>
+    <div class="cjm">${CJM.map((c,i)=>`<div class="st" data-i="${i}"><div class="ic">${c[0]}</div><b>${c[1]}</b><span>${c[2]}</span></div>`).join('')}</div></div>
+    <div class="modal-f"><button class="btn" data-k="demo">Показать пример ответа</button><button class="primary" data-k="go">Начать тур →</button></div></div></div>`);
+  document.body.appendChild(m);
+  const close=()=>m.remove();
+  m.querySelector('.x').onclick=close; m.onclick=e=>{ if(e.target===m) close(); };
+  m.querySelector('[data-k=go]').onclick=()=>{ close(); tourGo(0); };
+  m.querySelector('[data-k=demo]').onclick=()=>{ close(); demoRun(); };
+  const map={0:2,1:4,2:6,3:7,4:9,5:10,6:11};
+  m.querySelectorAll('.cjm .st').forEach(n=>n.onclick=()=>{ close(); tourGo(map[n.dataset.i]); });
+}
+let tourTimer=null;
+function tourEnd(){ clearInterval(tourTimer); if(tourEls){ Object.values(tourEls).forEach(n=>n.remove()); tourEls=null; } tourI=-1; window.removeEventListener('resize',tourPlace); document.removeEventListener('keydown',tourKey); }
+function tourKey(e){ if(e.key==='Escape') tourEnd(); else if(e.key==='ArrowRight') tourGo(tourI+1); else if(e.key==='ArrowLeft') tourGo(tourI-1); }
+function tourGo(i){
+  if(i<0) i=0;
+  if(i>=TOUR.length){ tourEnd(); return; }
+  tourI=i;
+  if(!tourEls){
+    tourEls={block:el('<div class="tour-block"></div>'), hole:el('<div class="tour-hole"></div>'), pop:el('<div class="tour-pop"></div>')};
+    Object.values(tourEls).forEach(n=>document.body.appendChild(n));
+    tourEls.block.onclick=()=>{}; window.addEventListener('resize',tourPlace); tourTimer=setInterval(tourPlace, 500); document.addEventListener('keydown',tourKey);
+  }
+  const st=TOUR[i];
+  tourEls.pop.innerHTML=`<div class="stage">${esc(st.stage)}</div><h3>${esc(st.title)}</h3>${st.html}
+    <div class="tour-nav"><div class="tour-dots">${TOUR.map((_,k)=>`<i class="${k===i?'on':''}"></i>`).join('')}</div>
+    <button class="btn" data-k="skip">Закрыть</button>${i?'<button class="btn" data-k="prev">←</button>':''}<button class="primary" data-k="next">${i===TOUR.length-1?'Готово':'Далее →'}</button></div>`;
+  tourEls.pop.querySelector('[data-k=skip]').onclick=tourEnd;
+  const pv=tourEls.pop.querySelector('[data-k=prev]'); if(pv) pv.onclick=()=>tourGo(i-1);
+  tourEls.pop.querySelector('[data-k=next]').onclick=()=>tourGo(i+1);
+  if(st.action==='demo' && !document.querySelector('.demo-tag')) demoRun();
+  tourPlace();
+}
+function tourPlace(){
+  if(!tourEls) return;
+  const st=TOUR[tourI], t=document.querySelector(st.sel), hole=tourEls.hole, pop=tourEls.pop;
+  const vw=window.innerWidth, vh=window.innerHeight, pw=Math.min(360, vw-24), ph=pop.offsetHeight||220;
+  let r = t && t.offsetParent!==null ? t.getBoundingClientRect() : null;
+  if(st.sel==='#provider' && t) r=t.parentElement.getBoundingClientRect();
+  if(!r || r.width===0){ hole.style.cssText+=`;left:${vw/2}px;top:${vh/2}px;width:0;height:0`; pop.style.left=(vw-pw)/2+'px'; pop.style.top=(vh-ph)/2+'px'; return; }
+  const pad=6, R={l:Math.max(4,r.left-pad), t:Math.max(4,r.top-pad), w:Math.min(r.width+pad*2, vw-8), h:Math.min(r.height+pad*2, vh-8)};
+  Object.assign(hole.style,{left:R.l+'px',top:R.t+'px',width:R.w+'px',height:R.h+'px'});
+  let left, top;
+  if(R.h > vh*0.55 && R.w > vw*0.4){ left=R.l+R.w-pw-16; top=R.t+R.h-ph-16; }
+  else if(R.t+R.h+ph+14 < vh){ top=R.t+R.h+12; left=R.l; }
+  else if(R.t-ph-14 > 0){ top=R.t-ph-12; left=R.l; }
+  else if(R.l+R.w+pw+14 < vw){ left=R.l+R.w+12; top=Math.max(12, Math.min(vh-ph-12, R.t)); }
+  else { left=Math.max(12, R.l-pw-12); top=Math.max(12, Math.min(vh-ph-12, R.t)); }
+  pop.style.left=Math.max(12, Math.min(vw-pw-12, left))+'px'; pop.style.top=Math.max(12, Math.min(vh-ph-12, top))+'px';
+}
+try{ if(!localStorage.getItem('cf_tour_seen')){ localStorage.setItem('cf_tour_seen','1'); setTimeout(tourStart, 600); } }catch(e){}
+
+/* ── журнал расчётов и индикатор занятости ── */
+const SRC={engine:'пересчёт',llm:'LLM',tool:'инстр.',progress:'шаг',status:'статус',error:'ошибка',op:'задача',app:'app'};
+function toggleLog(force){ const d=$('#logDrawer'); const open = force===undefined ? !d.classList.contains('open') : force; d.classList.toggle('open', open); if(open){ const l=$('#logList'); l.scrollTop=l.scrollHeight; } }
+function logLine(x){
+  const l=$('#logList'); const f=$('#logFilter').value;
+  const t=new Date(x.t*1000).toLocaleTimeString('ru-RU');
+  const n=document.createElement('div'); n.className=`l src-${x.src} lv-${x.level}`; n.innerHTML=`<span class="t">${t}</span><span class="s">${esc(SRC[x.src]||x.src)}</span>${esc(x.text)}`;
+  const atBottom = l.scrollHeight-l.scrollTop-l.clientHeight < 40;
+  n.dataset.src=x.src; if(f && x.src!==f) n.style.display='none';
+  l.appendChild(n); while(l.children.length>1500) l.firstChild.remove();
+  if(atBottom) l.scrollTop=l.scrollHeight;
+}
+const mmss=s=>{ s=Math.round(s); return s>=60?`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`:`${s} с`; };
+function pulse(p){
+  const b=$('#busy'), t=$('#busyText'), st=$('#logState');
+  if(!p.ops.length){ b.className='busy'; t.textContent='свободно'; st.textContent='свободно'; $('#btnStop').style.display='none'; return; }
+  const o=p.ops[0]; const slow=o.idle>20;
+  b.className='busy on'+(slow?' slow':'');
+  const txt=`${o.name} · ${mmss(o.elapsed)}${o.step?' · '+o.step:''}${slow?` · ${mmss(o.idle)} без новых событий (идёт пересчёт)`:''}`;
+  t.textContent=txt; st.textContent=txt + (p.ops.length>1?` (+${p.ops.length-1} в очереди)`:'');
+  $('#btnStop').style.display=SID?'':'none';
+}
+let LOGSEQ=0;
+function connectLogs(){
+  try{
+    const es=new EventSource('/api/logs?after='+LOGSEQ);
+    es.addEventListener('log', e=>{ const x=JSON.parse(e.data); LOGSEQ=Math.max(LOGSEQ,x.seq); logLine(x); });
+    es.addEventListener('pulse', e=>pulse(JSON.parse(e.data)));
+    es.onerror=()=>{ es.close(); setTimeout(connectLogs, 2000); };
+  }catch(e){}
+}
+$('#logFilter').onchange=()=>{ const f=$('#logFilter').value; [...$('#logList').children].forEach(n=>n.style.display=(!f||n.dataset.src===f)?'':'none'); };
+async function stopRun(){ if(!SID) return; await fetch('/api/cancel/'+SID,{method:'POST'}); $('#busyText').textContent='останавливаю после текущего пересчёта…'; }
+connectLogs();
+try{ const mp=new URLSearchParams(location.search).get('model'); if(mp){ setTimeout(()=>upload({name:mp.split('/').pop(), path:mp}), 700); } }catch(e){}
+
+loadConfig();
+</script>
+</body>
+</html>
