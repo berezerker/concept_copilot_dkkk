@@ -100,10 +100,10 @@
   .kpi b{display:block;font-size:18px;font-family:var(--mono)}
   .kpi span{font-size:11px;color:var(--muted)}
   .ok{color:var(--green);font-weight:700}.bad{color:var(--red);font-weight:700}
-  .toolbar{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}
+  .toolbar{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:12px}
   .toolbar .btn{text-align:left;padding:8px 10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .toolbar .btn:disabled{opacity:.45;cursor:default}
-  .toolbar .btn.accent,.toolbar .btn.accent2{grid-column:span 3;padding:9px 12px;font-size:12.5px}
+  .toolbar .btn.accent,.toolbar .btn.accent2{grid-column:span 2;padding:9px 12px;font-size:12.5px}
   .toolbar .btn.accent{background:linear-gradient(90deg,#1665d8,#3b82f6);color:#fff;border-color:transparent}
   .toolbar .btn.accent2{background:linear-gradient(90deg,#7b5cd6,#9a7bf0);color:#fff;border-color:transparent}
   header .btn-demo{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer}
@@ -201,6 +201,7 @@
       <div class="toolbar" id="toolbar">
         <button class="btn" id="btnMap" onclick="direct('map')" disabled>🗺 Карта модели</button>
         <button class="btn" id="btnAudit" onclick="direct('audit')" disabled>🔍 Предпроверка</button>
+        <button class="btn" id="btnParams" onclick="direct('params')" disabled title="Все числа модели, которые можно менять: цены, курсы, коэффициенты, ставки">📒 Параметры</button>
         <button class="btn" id="btnDeps" onclick="direct('deps')" disabled title="От чего зависят ключевые метрики — по экономическим факторам">🧭 Факторы</button>
         <button class="btn accent2" id="btnExpert" onclick="openExpert()" disabled>🧑‍🏭 Отраслевой эксперт: новость → стресс</button>
         <button class="btn accent" id="btnKpki" onclick="openKpki()" disabled>📑 Заключение для КПКИ (Word)</button>
@@ -300,7 +301,7 @@ async function afterUpload(r, box){
     add(el(`<div class="sys">✓ Экспресс-анализ «${esc(d.card.file)}» готов за ${d.seconds} с: ${d.card.sheets_total} листов, ${d.card.formulas_total.toLocaleString('ru-RU')} формул. Карточка модели — слева; агент опирается на неё во всех ответах.${d.engine?'':'<br><b>Пересчёт недоступен:</b> '+esc(d.engine_error||'')}</div>`));
     chipsRender();
     $('#send').disabled = false;
-    ['#btnMap','#btnAudit','#btnDeps','#btnExpert','#btnKpki'].forEach(b=>$(b).disabled=false);
+    ['#btnMap','#btnAudit','#btnParams','#btnDeps','#btnExpert','#btnKpki'].forEach(b=>$(b).disabled=false);
     DEFAULTS = null;
     renderSem(d.semantics, 'rules');
     runSemantics(false);
@@ -371,6 +372,19 @@ async function openFactor(fid){
 function kmHtml(c){
   return c.key_metrics.map(m=>`<div class="metric"><b>${esc(m.metric)}</b> → ${m.candidates.slice(0,1).map(x=>`<span class="mono">${esc(x.sheet)}!${x.row}</span>${x.static?' <span style="color:#b3261e">не зависит от допущений</span>':''}`).join(', ')}</div>`).join('');
 }
+function renderParams(d, body){
+  const P=d.parameters||[], o=d.overview||{};
+  const row=p=>`<tr data-s="${esc((p.name+' '+p.label+' '+(p.block||'')+' '+p.sheet+' '+p.factor+' '+(p.sub||'')).toLowerCase())}"><td><b>${esc(p.name)}</b>${p.label&&p.label!==p.name?'<br><span style="color:var(--muted);font-size:12px">'+esc(p.label)+'</span>':''}</td><td class="mono">${esc(p.ref)}${p.scalar?'<br><span style="color:var(--muted)">одна ячейка</span>':''}</td><td style="font-size:12px">${esc(p.block||'')}</td><td>${esc(p.factor)}${p.sub?' / '+esc(p.sub):''}</td><td style="font-size:12px">${esc(Object.entries(p.values||{}).slice(0,3).map(([k,v])=>k+': '+v).join(' · '))} ${esc(p.unit||'')}</td><td style="font-size:12px">${p.influences?esc(p.influences.slice(0,4).join(', '))+(p.influences.length>4?'…':''):'<span style="color:#9a5a00">не доходит до ключевых показателей</span>'}</td></tr>`;
+  const box=el(`<div class="chart"><h4>Реестр параметров модели · всё, что можно менять${d.query?' · запрос «'+esc(d.query)+'»':''}</h4>
+    <div class="kv">Всего параметров: <b>${o.total??P.length}</b>${o.scalar?', одной ячейкой: '+o.scalar:''}${d.query?', найдено по запросу: '+d.found:''}. ${(o.sheets||[]).slice(0,8).map(x=>esc(x[0])+' '+x[1]).join(' · ')}</div>
+    <div style="display:flex;gap:8px;margin:8px 0"><input type="text" class="pf" placeholder="фильтр: слово из названия, блока, листа" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:13px">
+      <a class="btn" href="/api/params_xlsx/${SID}" target="_blank">⬇ Excel</a></div>
+    <div style="max-height:460px;overflow:auto"><table class="t"><tr><th>Параметр</th><th>Где</th><th>Блок</th><th>Фактор</th><th>Значения</th><th>Влияет на</th></tr>${P.map(row).join('')}</table></div>
+    ${P.length<d.found?`<div class="kv" style="margin-top:6px">Показано ${P.length} из ${d.found}; полный список — в Excel.</div>`:''}</div>`);
+  box.querySelector('.pf').oninput=e=>{ const q=e.target.value.toLowerCase().trim(); box.querySelectorAll('tr[data-s]').forEach(r=>{ r.style.display=!q||r.dataset.s.includes(q)?'':'none'; }); };
+  add(box, body);
+}
+
 function renderCatalog(d, body){
   const rows=d.concepts.map(c=>`<tr><td><b>${esc(c.name)}</b><br><span class="mono" style="color:var(--muted)">${esc(c.id)}</span></td><td class="mono">${esc(c.where)}${c.computed_in?'<br><span style="color:var(--muted)">считается: '+esc(c.computed_in)+'</span>':''}</td><td style="font-size:12px">${esc(c.label)}</td><td>${c.shock==='direct'?'напрямую':'через допущения'}</td><td class="n">${c.depends_on_inputs}</td><td style="font-size:12px">${esc(c.found_by)}${c.confidence<0.6?' · <span style="color:#b3261e">проверить</span>':''}${c.note?'<br>'+esc(c.note):''}</td></tr>`).join('');
   const params=(d.parameters||[]).map(p=>`<tr><td>${esc(p.name)}</td><td class="mono">${esc(p.ref)}</td><td>${esc(p.factor)}${p.sub?' / '+esc(p.sub):''}</td><td style="font-size:12px">${esc(Object.entries(p.values||{}).slice(0,3).map(([k,v])=>k+': '+v).join(' · '))}</td></tr>`).join('');
@@ -378,7 +392,7 @@ function renderCatalog(d, body){
     <table class="t"><tr><th>Показатель</th><th>Где</th><th>Подпись в модели</th><th>Шок</th><th style="text-align:right">Допущений</th><th>Как найден</th></tr>${rows}</table>
     ${d.missing&&d.missing.length?`<div class="kv" style="margin-top:6px">Не найдены: ${d.missing.map(esc).join(', ')}</div>`:''}
     ${params?`<h4 style="margin-top:10px">Параметры-допущения (${d.parameters_found})</h4><table class="t"><tr><th>Параметр</th><th>Где</th><th>Фактор</th><th>Значения</th></tr>${params}</table>`:''}
-    ${(d.warnings||[]).map(w=>`<div class="kv" style="color:#9a5a00;margin-top:6px">⚠ ${esc(w)}</div>`).join('')}</div>`));
+    ${(d.warnings||[]).map(w=>`<div class="kv" style="color:#9a5a00;margin-top:6px">⚠ ${esc(w)}</div>`).join('')}</div>`), body);
 }
 
 function renderCard(d){
@@ -504,6 +518,7 @@ function handle(ev, d, ctx){
   else if(ev==='semantics'){ renderSem(d,'done'); }
   else if(ev==='card'){ if($('#kmBox')) $('#kmBox').innerHTML=kmHtml(d); }
   else if(ev==='catalog'){ renderCatalog(d, body); }
+  else if(ev==='params'){ renderParams(d, body); }
   else if(ev==='answer'){
     const a=add(el(`<div class="answer">${md(d.text)}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><a class="btn" data-k="docx" href="#">⬇ Word (.docx)</a><a class="btn" data-k="md" href="#">⬇ Markdown (.md)</a></div></div>`), body);
     const fname = d.report ? 'Заключение_КПКИ' : 'Копилот_ответ';
@@ -588,7 +603,7 @@ function renderCharts(d, body){
 async function direct(kind, force=false){
   if(!SID || running) return;
   running=true; $('#send').disabled=true;
-  const title={map:'Карта модели', audit:'Предпроверка модели', deps:'От чего зависят ключевые метрики'}[kind];
+  const title={map:'Карта модели', audit:'Предпроверка модели', deps:'От чего зависят ключевые метрики', params:'Реестр параметров модели'}[kind];
   const ctx=newRun(title, kind==='deps'?'пересчёт по факторам · разбор — выбранной LLM':'без LLM · по формулам файла');
   await streamInto('/api/direct', {session_id:SID, kind, force, ...llm()}, ctx);
   running=false; $('#send').disabled=false; chipsRender();
@@ -879,7 +894,7 @@ const CJM=[['📂','Загрузка','копия модели, индекс, г
   ['💬','Исследование','любой вопрос — агент планирует шаги'],['⚡','Стресс и эксперт','пакет банка, карта зоны, новость'],['📑','Заключение КПКИ','фиксированный сценарий'],['⬇','Выгрузка','Word, Excel, Markdown']];
 const TOUR=[
   {sel:'#provider', stage:'Настройка', title:'Выберите «мозг» агента', html:'<p>OpenAI — для обезличенных моделей, <b>GigaChat</b> — для работы во внутреннем контуре с реальными данными клиента. Офлайн-сценарий — проверка без LLM.</p>'},
-  {sel:'#planLbl', stage:'Настройка', title:'Harness с планированием', html:'<p>Агент сначала строит план из 3–7 шагов, затем сам выбирает инструменты (их 26) и отмечает шаги. Выключите для коротких вопросов.</p>'},
+  {sel:'#planLbl', stage:'Настройка', title:'Harness с планированием', html:'<p>Агент сначала строит план из 3–7 шагов, затем сам выбирает инструменты (их 27) и отмечает шаги. Выключите для коротких вопросов.</p>'},
   {sel:'#drop', stage:'1 · Загрузка', title:'Загрузите модель Excel', html:'<p>Работаем с копией — исходный файл не меняется. За секунды строится индекс листов, шапки периодов (годы, кварталы, месяцы) и граф зависимостей всех формул.</p>'},
   {sel:'#eng', stage:'1 · Загрузка', title:'Живой пересчёт в Excel', html:'<p>Стрессы считаются настоящим Excel (xlwings) с итерациями до сходимости циклических ссылок. После каждого сценария модель восстанавливается.</p>'},
   {sel:'#semBox', stage:'2 · Экспресс-анализ', title:'Смысл модели', html:'<p>Каждая строка, влияющая на метрики, получает понятное название, описание и <b>экономический фактор</b>: цены, объёмы, курс, ставки, OPEX, CAPEX, налоги, долг + отраслевые подфакторы. Агент отвечает языком факторов, а не ячеек. Нажмите на фактор, чтобы увидеть его строки.</p>'},

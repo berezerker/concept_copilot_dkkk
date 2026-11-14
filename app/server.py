@@ -230,12 +230,14 @@ class DirectIn(BaseModel):
     session_id: str
     kind: str
     force: bool = False
+    query: str | None = None
     provider: str = "mock"
     model: str | None = None
 
 
 DIRECT = {"map": ("model_map", "Карта модели"), "audit": ("audit_model", "Предпроверка"),
-          "deps": ("dependency_analysis", "Анализ зависимостей по факторам")}
+          "deps": ("dependency_analysis", "Анализ зависимостей по факторам"),
+          "params": ("find_parameters", "Реестр параметров модели")}
 
 DEPS_SYSTEM = """Ты — старший кредитный аналитик ДККК. Тебе дают результаты автоматического анализа финансовой модели
 заёмщика: доли экономических факторов в чувствительности ключевых метрик, выводы и сцепки факторов (что через что
@@ -267,6 +269,8 @@ def direct_run(req: DirectIn):
                 _ensure_sem(s, client, emit)
             t0 = _t.time()
             args = {"force": True} if req.force else {}
+            if req.kind == "params":
+                args = {"query": req.query or "", "limit": 400}
             emit("tool_start", {"id": "d1", "name": tool, "args": args})
             res = TOOL_MAP[tool]["fn"](s, args, emit)
             emit("tool_end", {"id": "d1", "name": tool, "ok": True, "seconds": round(_t.time() - t0, 1), "result": res})
@@ -497,6 +501,16 @@ def reset(session_id: str):
     if s:
         s.history, s.plan = [], None
     return {"ok": True}
+
+
+@app.get("/api/params_xlsx/{session_id}")
+def params_xlsx(session_id: str):
+    """Реестр параметров модели — в Excel."""
+    from .workbook import params as pr
+    s = _session(session_id)
+    path = os.path.join(s.workdir, "parameters.xlsx")
+    pr.to_xlsx(s, path)
+    return FileResponse(path, filename="parameters_" + os.path.splitext(s.card["file"])[0] + ".xlsx")
 
 
 @app.get("/api/export/{session_id}")

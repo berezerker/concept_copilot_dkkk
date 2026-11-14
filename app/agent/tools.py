@@ -926,6 +926,30 @@ def t_get_catalog(s, a, emit):
     return payload
 
 
+def t_find_parameters(s, a, emit):
+    """Реестр параметров модели: найти введённые числа (цены, курсы, коэффициенты, ставки…) по смыслу запроса."""
+    from ..workbook import params as pr
+    limit = int(a.get("limit", 20) or 20)
+    hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit)
+    out = [{"ref": h["ref"], "sheet": h["sheet"], "row": h["row"], "name": h["name"], "label": h["label"][:90], "block": h["block"][:90] or None,
+            "unit": h["unit"] or None, "factor": h["factor"], "sub": h["sub"], "scalar": h["scalar"] or None, "values": h["values"],
+            "influences": h["influences"] or None, "fanout": h["fanout"], "meaning": h["desc"] or None} for h in hits]
+    payload = {"query": a.get("query") or "", "found": total, "parameters": out, "overview": pr.overview(s)}
+    emit("params", payload)
+    res = {"found": total, "parameters": out,
+           "note": "Шок параметра: {sheet, row, op, value} в run_stress (scalar — параметр одной ячейкой, шок меняет её). "
+                   "influences — на какие ключевые показатели параметр влияет по формулам (пусто — до них не доходит). "
+                   "Несколько похожих строк (по сегментам, продуктам) — уточни у пользователя или шокируй все и скажи об этом."}
+    if not out:
+        res["overview"] = pr.overview(s)
+        res["note"] = ("По запросу ничего не найдено. Попробуй другие слова (в том числе по-английски, как в подписях модели), "
+                       "фильтр factor или sheet; overview показывает, какие листы и блоки параметров есть. "
+                       "Подписи без пояснений (коды, сокращения) находятся лучше после разбора модели LLM.")
+    elif not a.get("query"):
+        res["overview"] = pr.overview(s)
+    return res
+
+
 def t_catalog_set(s, a, emit):
     """Закрепить показатель за строкой модели (исправить справочник или добавить свой показатель)."""
     from ..workbook import catalog as cg
@@ -960,6 +984,15 @@ TOOLS = [
          "query": {"type": "string"}, "group": {"type": "string", "enum": ["pnl", "cf", "bs", "ratio", "custom"]},
          "factor": {"type": "string", "description": "Показать параметры-допущения этого фактора/подфактора"},
          "params": {"type": "boolean", "description": "Показать все параметры-допущения"}, "limit": {"type": "integer"}}}},
+    {"name": "find_parameters", "fn": t_find_parameters,
+     "description": "Реестр параметров ЭТОЙ модели: все введённые числа, от которых что-то зависит (цены, курсы, коэффициенты, "
+                    "ставки, нормативы — на любом листе, рядом по годам или одной ячейкой). Ищет по смыслу запроса в названии, "
+                    "подписи, блоке, листе и факторе («цена бензина», «коэффициент загрузки», «ставка по кредиту»). "
+                    "ВСЕГДА вызывай перед шоком, если пользователь называет параметр словами. Без query — обзор реестра.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "Что ищем, словами пользователя"},
+         "factor": {"type": "string", "description": "Ограничить фактором или подфактором"},
+         "sheet": {"type": "string", "description": "Ограничить листом"}, "limit": {"type": "integer"}}}},
     {"name": "catalog_set", "fn": t_catalog_set,
      "description": "Закрепить показатель справочника за строкой модели: исправить неверно найденный (concept = id из справочника) "
                     "или добавить свой («выручка сегмента А»). Строку сначала найди через search_rows. Закрепление сохраняется для модели.",

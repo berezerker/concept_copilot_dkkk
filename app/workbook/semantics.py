@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .index import REF_RE, STR_RE, WorkbookIndex
 from .modelmap import is_scalar_row, row_class, scalar_cols, upstream_inputs
 
-SEM_VERSION = 8
+SEM_VERSION = 9
 
 # ───────────────────────── справочник ─────────────────────────
 FACTORS = {   # id: (название, направление по умолчанию: up — рост хорош для кредитора, down — плох, neutral)
@@ -235,6 +235,18 @@ def build_passports(idx: WorkbookIndex, card: dict, forecast_start=None, max_cal
                             nxt.append(p)
                 frontier = nxt[:250]
                 depth += 1
+    # Реестр параметров: ВСЕ введённые числа, на которые ссылаются формулы, — и те, что не доходят до ключевых
+    # показателей (их тоже могут попросить изменить). У них пустой список metrics.
+    inactive = getattr(idx, "inactive", None) or set()
+    for sname, sh in idx.sheets.items():
+        if sname in inactive or sh.role in ("contents", "separator"):
+            continue
+        for r, ri in sh.rows.items():
+            if (sname, r) in rows or not ri.label or r in sh.headers or r == sh.header_row or not idx.dependents.get((sname, r)):
+                continue
+            cls = row_class(idx, sname, r, forecast_start)
+            if cls in ("input", "mixed"):
+                rows[(sname, r)] = {"kind": cls, "fanout": len(idx.dependents[(sname, r)]), "depth": 99}
     calc = [k for k, v in rows.items() if v["kind"] == "calc"]
     if len(calc) > max_calc:
         drop = sorted(calc, key=lambda k: (rows[k]["depth"], -rows[k]["fanout"]))[max_calc:]

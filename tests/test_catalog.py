@@ -115,8 +115,32 @@ def test_catalog_and_shocks():
     base = s.engine.read(["'Расчёт'!C15:I15"])
     r = call(s, "run_stress", {"scenarios": [{"name": "y", "shocks": [{"concept": "revenue", "op": "pct", "value": -30}]}], "metrics": [{"concept": "dscr"}]})
     assert s.engine.read(["'Расчёт'!C15:I15"]) == base
+    test_parameter_registry(s)
     s.close()
-    print("catalog ok: роли по структуре, наборы сценариев, именованные диапазоны, параметры одной ячейкой, шок по показателю")
+    print("catalog ok: реестр параметров, роли по структуре, наборы сценариев, именованные диапазоны, параметры одной ячейкой, шок по показателю")
+
+
+def test_parameter_registry(s):
+    """Реестр параметров: всё, что можно менять, находится по смыслу запроса — на любом листе, рядом или одной ячейкой."""
+    from app.workbook import params as pr
+    es = pr.entries(s)
+    assert len(es) >= 8 and all(e["sheet"] != "Стресс" for e in es), "невыбранный набор сценария в реестр не входит"
+    h, n = pr.search(s, "ставка налога на прибыль")
+    assert h and h[0]["sheet"] == "Параметры" and h[0]["scalar"], h[:2]          # параметр одной ячейкой
+    h, _ = pr.search(s, "цена продукции")
+    assert h and h[0]["label"] == "Цена продукции" and h[0]["sheet"] == "База", h[:2]
+    h, _ = pr.search(s, "loan interest rate")                                     # англ. запрос → «Процентная ставка по кредиту»
+    assert h and h[0]["label"] == "Процентная ставка по кредиту", h[:2]
+    assert pr.search(s, "стоимость космического корабля")[1] == 0
+    r = call(s, "find_parameters", {"query": "удельные затраты"})
+    assert r["found"] >= 1 and r["parameters"][0]["label"] == "Удельные затраты", r
+    p = r["parameters"][0]
+    res = call(s, "run_stress", {"scenarios": [{"name": "t", "shocks": [{"sheet": p["sheet"], "row": p["row"], "op": "pct", "value": 20}]}],
+                                 "metrics": [{"concept": "ebitda"}]})
+    assert res["metrics"], res
+    import tempfile, os
+    path = pr.to_xlsx(s, os.path.join(tempfile.mkdtemp(), "p.xlsx"))
+    assert os.path.getsize(path) > 3000
 
 
 if __name__ == "__main__":
