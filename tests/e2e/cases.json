@@ -1,45 +1,150 @@
 {
-  "_comment": "Сценарии E2E. kind: agent — запрос в чат (harness + LLM); direct — кнопка без LLM; kpki / expert / deps_llm — фиксированные сценарии. expect_tools — какие инструменты агент ДОЛЖЕН вызвать (любой из списка в группе). rubric — что особенно проверяет судья.",
-  "cases": [
-    {"id": "direct_map", "kind": "direct", "tool": "model_map"},
-    {"id": "direct_audit", "kind": "direct", "tool": "audit_model"},
-    {"id": "direct_deps", "kind": "direct", "tool": "dependency_analysis", "max_seconds": 600},
-
-    {"id": "card_overview", "kind": "agent",
-     "query": "Коротко опиши модель: отрасль, ключевые метрики и где лежат основные допущения",
-     "expect_tools": [["get_model_card", "list_sheets", "model_map", "search_rows"]],
-     "rubric": "Ответ описывает структуру модели понятными словами, без выдуманных листов."},
-
-    {"id": "stress_price", "kind": "agent",
-     "query": "Что будет с Net Debt / EBITDA и DSCR, если цены реализации упадут на 10% и на 20%?",
-     "expect_tools": [["run_stress", "stress_pack"]],
-     "rubric": "Есть таблица база vs сценарии по годам, выводы опираются на цифры пересчёта."},
-
-    {"id": "drivers", "kind": "agent",
-     "query": "От чего на самом деле зависит долговая нагрузка заёмщика? Разложи по экономическим факторам",
-     "expect_tools": [["factor_drivers", "dependency_analysis", "find_drivers"]],
-     "rubric": "Говорит языком факторов (цены, курс, ставки), а не адресами ячеек; называет главный фактор и долю."},
-
-    {"id": "covenant_headroom", "kind": "agent",
-     "query": "Проверь ковенант Net Debt / EBITDA ≤ 3,5 и DSCR ≥ 1,2: выполняются ли и какой запас прочности по ключевым драйверам?",
-     "expect_tools": [["covenant_check"], ["headroom", "reverse_stress", "goal_seek"]],
-     "rubric": "Даёт выполнение по годам, минимальный запас и на сколько % драйвер может упасть до пробоя."},
-
-    {"id": "complex_resilience", "kind": "agent",
-     "query": "Оцени устойчивость заёмщика: ковенанты, ключевые факторы, стресс-пакет банка и вероятность пробоя",
-     "expect_tools": [["covenant_check"], ["stress_pack", "run_stress"], ["monte_carlo", "reverse_stress", "headroom"]],
-     "rubric": "Комплексный ответ: несколько инструментов, итоговый вывод для кредитчика, оговорки.",
-     "max_seconds": 900},
-
-    {"id": "audit_explain", "kind": "agent",
-     "query": "Сделай предпроверку модели и объясни 3 самых важных замечания",
-     "expect_tools": [["audit_model"]],
-     "rubric": "Три конкретных замечания с последствиями для кредитного анализа."},
-
-    {"id": "deps_llm", "kind": "deps_llm", "max_seconds": 900},
-    {"id": "expert_news", "kind": "expert",
-     "news": "ЦБ неожиданно повысил ключевую ставку на 300 б.п., рынок ждёт жёсткую ДКП ещё 2 года",
-     "rubric": "Эксперт меняет в первую очередь ставки/курс, обоснования осмысленные, стресс выполнен."},
-    {"id": "kpki", "kind": "kpki", "mc_runs": 40, "max_seconds": 1200}
-  ]
+ "_comment": "Сценарии E2E. kind: agent — запрос в чат (harness + LLM); direct — кнопка без LLM; kpki / expert / deps_llm — фиксированные сценарии. expect_tools — какие инструменты агент ДОЛЖЕН вызвать (любой из списка в группе). rubric — что особенно проверяет судья.",
+ "cases": [
+  {
+   "id": "direct_map",
+   "kind": "direct",
+   "tool": "model_map"
+  },
+  {
+   "id": "direct_audit",
+   "kind": "direct",
+   "tool": "audit_model"
+  },
+  {
+   "id": "direct_deps",
+   "kind": "direct",
+   "tool": "dependency_analysis",
+   "max_seconds": 600
+  },
+  {
+   "id": "card_overview",
+   "kind": "agent",
+   "query": "Коротко опиши модель: отрасль, ключевые метрики и где лежат основные допущения",
+   "expect_tools": [
+    [
+     "get_model_card",
+     "list_sheets",
+     "model_map",
+     "search_rows"
+    ]
+   ],
+   "rubric": "Ответ описывает структуру модели понятными словами, без выдуманных листов."
+  },
+  {
+   "id": "stress_price",
+   "kind": "agent",
+   "query": "Что будет с Net Debt / EBITDA и DSCR, если цены реализации упадут на 10% и на 20%?",
+   "expect_tools": [
+    [
+     "run_stress",
+     "stress_pack"
+    ]
+   ],
+   "rubric": "Есть таблица база vs сценарии по годам, выводы опираются на цифры пересчёта."
+  },
+  {
+   "id": "concept_stress",
+   "kind": "agent",
+   "query": "Сделай стресс по показателям: выручка −10% и CAPEX +20%. Что будет с EBITDA, DSCR и Net Debt / EBITDA по годам?",
+   "expect_tools": [
+    [
+     "run_stress",
+     "stress_pack"
+    ]
+   ],
+   "max_seconds": 400,
+   "rubric": "Агент не спрашивает, где в модели выручка и CAPEX, а берёт их из справочника. В ответе сказано, как выполнен шок каждого показателя (напрямую или через допущения) и что это значит; есть таблица база/стресс по годам для трёх метрик."
+  },
+  {
+   "id": "catalog_overview",
+   "kind": "agent",
+   "query": "Покажи справочник модели: какие показатели ты нашёл, где они считаются и какие из них можно шоковать напрямую",
+   "expect_tools": [
+    [
+     "get_catalog"
+    ]
+   ],
+   "max_seconds": 200,
+   "rubric": "Перечислены найденные показатели с местом в модели и способом шока; названы ненайденные показатели и ограничения книги (наборы сценариев, предупреждения), если они есть."
+  },
+  {
+   "id": "drivers",
+   "kind": "agent",
+   "query": "От чего на самом деле зависит долговая нагрузка заёмщика? Разложи по экономическим факторам",
+   "expect_tools": [
+    [
+     "factor_drivers",
+     "dependency_analysis",
+     "find_drivers"
+    ]
+   ],
+   "rubric": "Говорит языком факторов (цены, курс, ставки), а не адресами ячеек; называет главный фактор и долю."
+  },
+  {
+   "id": "covenant_headroom",
+   "kind": "agent",
+   "query": "Проверь ковенант Net Debt / EBITDA ≤ 3,5 и DSCR ≥ 1,2: выполняются ли и какой запас прочности по ключевым драйверам?",
+   "expect_tools": [
+    [
+     "covenant_check"
+    ],
+    [
+     "headroom",
+     "reverse_stress",
+     "goal_seek"
+    ]
+   ],
+   "rubric": "Даёт выполнение по годам, минимальный запас и на сколько % драйвер может упасть до пробоя."
+  },
+  {
+   "id": "complex_resilience",
+   "kind": "agent",
+   "query": "Оцени устойчивость заёмщика: ковенанты, ключевые факторы, стресс-пакет банка и вероятность пробоя",
+   "expect_tools": [
+    [
+     "covenant_check"
+    ],
+    [
+     "stress_pack",
+     "run_stress"
+    ],
+    [
+     "monte_carlo",
+     "reverse_stress",
+     "headroom"
+    ]
+   ],
+   "rubric": "Комплексный ответ: несколько инструментов, итоговый вывод для кредитчика, оговорки.",
+   "max_seconds": 900
+  },
+  {
+   "id": "audit_explain",
+   "kind": "agent",
+   "query": "Сделай предпроверку модели и объясни 3 самых важных замечания",
+   "expect_tools": [
+    [
+     "audit_model"
+    ]
+   ],
+   "rubric": "Три конкретных замечания с последствиями для кредитного анализа."
+  },
+  {
+   "id": "deps_llm",
+   "kind": "deps_llm",
+   "max_seconds": 900
+  },
+  {
+   "id": "expert_news",
+   "kind": "expert",
+   "news": "ЦБ неожиданно повысил ключевую ставку на 300 б.п., рынок ждёт жёсткую ДКП ещё 2 года",
+   "rubric": "Эксперт меняет в первую очередь ставки/курс, обоснования осмысленные, стресс выполнен."
+  },
+  {
+   "id": "kpki",
+   "kind": "kpki",
+   "mc_runs": 40,
+   "max_seconds": 1200
+  }
+ ]
 }

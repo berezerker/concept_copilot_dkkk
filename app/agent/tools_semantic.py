@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 
 from ..workbook import semantics as sm
 from ..workbook.card import numeric_years
+from ..workbook.modelmap import is_scalar_row
 from ..workbook.modelmap import upstream_inputs  # noqa: F401
 from .tools import METRIC_SCHEMA, _metric_refs, rnd
 from .tools_ext import RULE_SCHEMA, _agg, _base_series, _fy, _run
@@ -45,15 +46,13 @@ def _groups(s, metric_ref, level="factor"):
     """Строки-допущения выше метрики, сгруппированные по фактору (или подфактору)."""
     sh, r = metric_ref
     ups, _ = upstream_inputs(s.idx, sh, r, s.forecast_start)
-    prim = sm._primary_inputs(s.idx)
     groups = defaultdict(list)
     for u in ups:
         if not u["fanout"]:
             continue
-        if s.idx.sheets[u["sheet"]].role == "inputs" and u["sheet"] != prim:
-            continue
         ys = [y for y in numeric_years(s.idx, u["sheet"], u["row"]) if not s.forecast_start or y >= s.forecast_start]
-        if not ys:
+        shx = s.idx.sheets[u["sheet"]]
+        if not ys and not is_scalar_row(shx, shx.rows[u["row"]]):      # ни ряда в прогнозе, ни параметра одной ячейкой
             continue
         hi = sm.info(s, u["sheet"], u["row"])
         key = (hi["factor"], hi["sub"]) if level == "sub" and hi["sub"] else (hi["factor"], "")
@@ -350,6 +349,13 @@ def t_dependency_analysis(s, a, emit):
                 metrics.append({"sheet": km[nm]["sheet"], "row": km[nm]["row"], "name": nm})
             if len(metrics) >= 2:
                 break
+        if not metrics:                                    # в модели нет привычных коэффициентов — берём первые «живые» показатели
+            for m in s.card["key_metrics"]:
+                c = m["candidates"][0]
+                if not c.get("static"):
+                    metrics.append({"sheet": c["sheet"], "row": c["row"], "name": m["metric"]})
+                if len(metrics) >= 2:
+                    break
     metrics = metrics[:3]
     shock = float(a.get("shock_pct", 10))
     hows = [a.get("aggregate") or ("max" if (m.get("_op") in ("<=", "<") or "долг" in (m.get("name") or "").lower()) else "min")

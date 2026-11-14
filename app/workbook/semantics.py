@@ -19,9 +19,9 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 from .index import REF_RE, STR_RE, WorkbookIndex
-from .modelmap import row_class, upstream_inputs
+from .modelmap import is_scalar_row, row_class, scalar_cols, upstream_inputs
 
-SEM_VERSION = 7
+SEM_VERSION = 8
 
 # ───────────────────────── справочник ─────────────────────────
 FACTORS = {   # id: (название, направление по умолчанию: up — рост хорош для кредитора, down — плох, neutral)
@@ -203,14 +203,9 @@ def formula_words(idx: WorkbookIndex, sheet, row, forecast_start=None, names=Non
     return txt[:limit] + ("…" if len(txt) > limit else "")
 
 
-def _primary_inputs(idx):
-    ins = sorted((n for n, x in idx.sheets.items() if x.role == "inputs"), key=len)
-    return ins[0] if ins else None
-
-
 def build_passports(idx: WorkbookIndex, card: dict, forecast_start=None, max_calc=450):
-    """Строки-допущения выше ключевых метрик (основной набор Inputs) + расчётные строки около метрик."""
-    prim = _primary_inputs(idx)
+    """Строки-допущения выше показателей справочника (без невыбранных наборов сценариев) + расчётные строки
+    между допущениями и показателями. Одиночные параметры (ячейка без ряда по годам) входят наравне с рядами."""
     rows = {}
     metric_of = defaultdict(set)
     for m in card.get("key_metrics", []):
@@ -218,9 +213,6 @@ def build_passports(idx: WorkbookIndex, card: dict, forecast_start=None, max_cal
             ups, _ = upstream_inputs(idx, c["sheet"], c["row"], forecast_start)
             for u in ups:
                 if u["fanout"] == 0:
-                    continue
-                shr = idx.sheets[u["sheet"]]
-                if shr.role == "inputs" and u["sheet"] != prim:
                     continue
                 key = (u["sheet"], u["row"])
                 metric_of[key].add(m["metric"])
@@ -257,7 +249,13 @@ def build_passports(idx: WorkbookIndex, card: dict, forecast_start=None, max_cal
         vals = [(y, ri.values[c]) for c, y in sorted(sh.years_for(r).items())
                 if isinstance(ri.values.get(c), (int, float)) and not isinstance(ri.values.get(c), bool)
                 and (forecast_start is None or y >= forecast_start)][:4]
-        out[f"{sheet}!{r}"] = {"sheet": sheet, "row": r, "label": ri.label, "unit": ri.unit, "role": sh.role,
+        scalar = False
+        if not vals and is_scalar_row(sh, ri):               # параметр одной ячейкой
+            from .index import col_letter
+            vals = [(f"{col_letter(c)}{r}", ri.values[c]) for c in scalar_cols(sh, ri)
+                    if isinstance(ri.values.get(c), (int, float)) and not isinstance(ri.values.get(c), bool)][:3]
+            scalar = True
+        out[f"{sheet}!{r}"] = {"sheet": sheet, "row": r, "label": ri.label, "unit": ri.unit, "role": sh.role, "scalar": scalar,
                               "kind": meta["kind"], "fanout": meta["fanout"], "section": _section(idx, sheet, r),
                               "values": {str(y): (round(v, 4) if abs(v) < 1e6 else round(v)) for y, v in vals},
                               "metrics": sorted(metric_of[(sheet, r)])}

@@ -8,7 +8,7 @@ import statistics
 from ..workbook.card import numeric_years
 from ..workbook.index import col_index
 from ..workbook.periods import norm_period
-from ..workbook.modelmap import audit, build_map, explain_cell, upstream_inputs
+from ..workbook.modelmap import audit, build_map, explain_cell, is_scalar_row, upstream_inputs
 from ..workbook import semantics as sm
 from .tools import (METRIC_SCHEMA, SHOCK_SCHEMA, _build_overrides, _metric_refs, _read_metrics, norm, rnd)
 
@@ -17,6 +17,12 @@ def dlabel(s, d):
     """Человеческое имя драйвера/цели шока."""
     if d.get("name"):
         return d["name"]
+    if d.get("concept") and not d.get("row"):
+        from ..workbook import catalog as cg
+        try:
+            return cg.resolve(s, d["concept"])["name"]
+        except ValueError:
+            return str(d["concept"])
     if d.get("factor") or d.get("sub"):
         if d.get("sub"):
             ind = (s.sem or {}).get("industry", "generic")
@@ -74,16 +80,16 @@ def t_model_map(s, a, emit):
     for x in m["metrics"]:
         sh_, r_ = x["ref"].split("!")
         ups, _ = upstream_inputs(s.idx, sh_, int(r_), s.forecast_start)
-        prim = sm._primary_inputs(s.idx)
-        c = Counter(sm.info(s, u["sheet"], u["row"])["factor_name"] for u in ups
-                    if u["fanout"] and not (s.idx.sheets[u["sheet"]].role == "inputs" and u["sheet"] != prim))
+        c = Counter(sm.info(s, u["sheet"], u["row"])["factor_name"] for u in ups if u["fanout"])
         x["by_factor"] = dict(c.most_common(8))
     emit("map", m)
     return {"sheets": [{k: x[k] for k in ("sheet", "role", "layer", "inputs", "calc")} for x in m["sheets"]],
             "flows_top": m["edges"][:15], "metrics_drivers": [{k: v for k, v in x.items() if k != "by_sheet"} for x in m["metrics"]],
             "row_classes": m["classes_total"],
-            "note": "outside_inputs_share — доля строк-допущений, влияющих на метрику, которые лежат НЕ на листах Inputs. "
-                    "Шоковать их можно через run_stress (row/range/match) так же, как Inputs."}
+            "alt_sets": s.idx.alt_sets, "warnings": s.idx.warnings,
+            "note": "Роли листов определены по структуре книги (не по названиям): inputs — листы-источники допущений, "
+                    "calc — расчёты, report — итоговые. outside_inputs_share — доля допущений, влияющих на метрику, которые "
+                    "лежат НЕ на листах-источниках (вбиты в расчётные листы). Шоковать можно любые: row/cell/range/match/factor/concept."}
 
 
 def t_audit_model(s, a, emit):
@@ -151,7 +157,8 @@ def t_find_drivers(s, a, emit):
         if norm(u["sheet"]) in excl or u["fanout"] == 0:
             continue
         ys = [y for y in numeric_years(s.idx, u["sheet"], u["row"]) if not s.forecast_start or y >= s.forecast_start]
-        if not ys:
+        shx = s.idx.sheets[u["sheet"]]
+        if not ys and not is_scalar_row(shx, shx.rows[u["row"]]):      # ни ряда в прогнозе, ни параметра одной ячейкой
             continue
         key = (norm(u["label"]), u["unit"])
         if key in seen_lab and u["label"]:        # одна и та же строка в Inputs / Inputs_C / Inputs_O
@@ -329,10 +336,12 @@ def t_monte_carlo(s, a, emit):
 
 
 # ───────────────────────── схемы ─────────────────────────
-RULE_SCHEMA = {"type": "object", "properties": {
+RULE_SCHEMA = {"type": "object", "description": "Ковенант: метрика (concept из справочника либо sheet+row), знак и порог",
+               "properties": {
+    "concept": {"type": "string", "description": "Показатель из справочника (dscr, net_debt_ebitda, icr…) вместо sheet+row"},
     "sheet": {"type": "string"}, "row": {"type": "integer"}, "name": {"type": "string"},
     "op": {"type": "string", "enum": [">=", "<=", ">", "<"]}, "threshold": {"type": "number"}},
-    "required": ["sheet", "row", "op", "threshold"]}
+    "required": ["op", "threshold"]}
 DRIVER_SCHEMA = {"type": "object", "properties": {
     k: v for k, v in SHOCK_SCHEMA["properties"].items() if k not in ("op", "value")} | {"name": {"type": "string"}}}
 MC_DRIVER_SCHEMA = {"type": "object", "properties": DRIVER_SCHEMA["properties"] | {

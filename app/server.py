@@ -21,7 +21,7 @@ from .llm import available_providers, make_client, LLMError
 app = FastAPI(title="Копилот ДККК · агент CashFlow")
 STATIC = os.path.join(config.ROOT, "static")
 SESSIONS: dict[str, Session] = {}
-APP_VERSION = "2026-11-03.1"
+APP_VERSION = "2026-11-14.1"
 if config.env_bool("CF_RECORD"):                     # запись сеанса для интерактивного демо (tools/build_demo.py)
     from .recorder import RecorderMiddleware
     app.add_middleware(RecorderMiddleware)
@@ -280,16 +280,38 @@ def direct_run(req: DirectIn):
     return _sse(job, title, s.id)
 
 
-def _ensure_sem(s, client, emit):
-    """Описания строк делаем LLM по каждой модели: если ещё не сделаны — перед ходом агента."""
-    from .workbook import semantics as sm
-    if client.name == "mock" or (s.sem and s.sem.get("llm")):
-        return
-    emit("status", {"text": f"Разбираю смысл модели ({client.describe()})…"})
-    sm.enrich(s.sem, client, emit)
-    sm.refresh_formula_words(s.idx, s.sem, s.forecast_start)
-    sm.save(s.cache_dir, s.sem)
-    emit("semantics", sm.summary(s.sem))
+def _ensure_sem(s, client, emit, force=False):
+    """Смысл модели делает LLM по каждой модели, один раз (кэш по хэшу файла):
+    1) справочник — сопоставление показателей, которые не нашлись по названию (catalog.llm_map);
+    2) паспорт строк — деловые названия, описания, факторы (semantics.enrich).
+    Справочник идёт первым: от найденных показателей зависит, какие строки попадут в паспорт."""
+    from .workbook import catalog as cg, semantics as sm
+    if client.name == "mock":
+        return False
+    done = False
+    if s.catalog is not None and (force or not s.catalog.get("llm")):
+        before = {k: (v["primary"]["sheet"], v["primary"]["row"]) for k, v in s.catalog["concepts"].items()}
+        cg.llm_map(s.idx, s.catalog, client, s.forecast_start, emit)
+        cg.save(s.cache_dir, s.catalog)
+        after = {k: (v["primary"]["sheet"], v["primary"]["row"]) for k, v in s.catalog["concepts"].items()}
+        if after != before:
+            s.refresh_card()
+            if not (s.sem and s.sem.get("llm")) or force:
+                s.sem = sm.build_semantics(s.idx, s.card, s.forecast_start)
+            emit("card", s.card)
+        done = True
+    if force or not (s.sem and s.sem.get("llm")):
+        emit("status", {"text": f"Разбираю смысл модели ({client.describe()})…"})
+        if force:
+            s.sem = sm.build_semantics(s.idx, s.card, s.forecast_start)
+        sm.enrich(s.sem, client, emit)
+        from .logbus import BUS
+        BUS.check(s.id)
+        sm.refresh_formula_words(s.idx, s.sem, s.forecast_start)
+        sm.save(s.cache_dir, s.sem)
+        emit("semantics", sm.summary(s.sem))
+        done = True
+    return done
 
 
 def _session(session_id):
@@ -387,7 +409,7 @@ def defaults(session_id: str):
     for name, op, thr in DEFAULT_RULES:
         for c in km.get(name, [])[:1]:
             rules.append({"sheet": c["sheet"], "row": c["row"], "name": name, "op": op, "threshold": thr, "label": c["label"]})
-    metrics = [{"sheet": c["sheet"], "row": c["row"], "name": m, "label": c["label"]} for m, cs in km.items() for c in cs[:1]]
+    metrics = [{"sheet": c["sheet"], "row": c["row"], "name": m, "label": c["label"]} for m, cs in list(km.items())[:12] for c in cs[:1]]
     from .workbook import semantics as sm
     fields = [{"sheet": d["sheet"], "row": d["row"], "name": sm.name(s, d["sheet"], d["row"])[:60], "unit": d["unit"]}
               for d in s.card["drivers"][:15]]
@@ -409,22 +431,16 @@ def semantics(req: SemIn):
     from .workbook import semantics as sm
 
     def job(emit):
-        if s.sem and s.sem.get("llm") and not req.force:
-            emit("semantics", dict(sm.summary(s.sem), cached=True))
-            return
         if client.name == "mock":
             emit("semantics", dict(sm.summary(s.sem), offline=True))
             return
-        emit("progress", {"text": f"Разбор смысла модели: {len(s.sem['rows'])} строк, {client.describe()}…"})
-        sem = sm.build_semantics(s.idx, s.card, s.forecast_start) if req.force else s.sem
-        sm.enrich(sem, client, emit)
-        from .logbus import BUS
-        BUS.check(s.id)
-        sm.refresh_formula_words(s.idx, sem, s.forecast_start)
+        if s.sem and s.sem.get("llm") and (s.catalog or {}).get("llm") and not req.force:
+            emit("semantics", dict(sm.summary(s.sem), cached=True))
+            return
+        emit("progress", {"text": f"Разбор смысла модели: справочник показателей и {len(s.sem['rows'])} строк, {client.describe()}…"})
         with s.lock:
-            s.sem = sem
-        sm.save(s.cache_dir, sem)
-        emit("semantics", sm.summary(sem))
+            _ensure_sem(s, client, emit, force=req.force)
+        emit("semantics", sm.summary(s.sem))
     return _sse(job, "Разбор смысла модели", s.id)
 
 

@@ -36,7 +36,7 @@
   .kv{font-size:12.5px;line-height:1.6}
   .kv b{font-weight:600}
   .pill{display:inline-block;font-size:10.5px;font-weight:700;border-radius:10px;padding:1px 7px;margin:1px 2px 1px 0}
-  .r-inputs{background:#e3edfc;color:#1553b0}.r-outputs{background:#e2f5e9;color:#137a3e}.r-dashboard{background:#fdf0dc;color:#9a5a00}
+  .r-inputs{background:#e3edfc;color:#1553b0}.r-report,.r-outputs{background:#e2f5e9;color:#137a3e}.r-dashboard{background:#fdf0dc;color:#9a5a00}
   .r-calc,.r-assumptions,.r-is,.r-bs,.r-cf,.r-debt{background:#f0f2f5;color:#4d5866}.r-contents{background:#f5f0fd;color:#5b3fc0}
   .sheetlist{font-size:12px;line-height:1.75}
   .mono{font-family:var(--mono);font-size:11.5px;color:#0b57a4}
@@ -340,6 +340,7 @@ async function runSemantics(force){
         if(!data) continue; const d=JSON.parse(data);
         if(ev==='progress' && $('#semStatus')) $('#semStatus').textContent=d.text;
         if(ev==='semantics') renderSem(d, d.offline?'offline':'done');
+        if(ev==='card' && $('#kmBox')) $('#kmBox').innerHTML=kmHtml(d);
         if(ev==='error' && $('#semStatus')) $('#semStatus').innerHTML=`<span class="bad">${esc(d.text)}</span>`;
       } }
   }catch(e){ if($('#semStatus')) $('#semStatus').innerHTML=`<span class="bad">${esc(e.message)}</span>`; }
@@ -367,10 +368,25 @@ async function openFactor(fid){
   m.querySelector('[data-k=cancel]').style.display='none';
 }
 
+function kmHtml(c){
+  return c.key_metrics.map(m=>`<div class="metric"><b>${esc(m.metric)}</b> → ${m.candidates.slice(0,1).map(x=>`<span class="mono">${esc(x.sheet)}!${x.row}</span>${x.static?' <span style="color:#b3261e">не зависит от допущений</span>':''}`).join(', ')}</div>`).join('');
+}
+function renderCatalog(d, body){
+  const rows=d.concepts.map(c=>`<tr><td><b>${esc(c.name)}</b><br><span class="mono" style="color:var(--muted)">${esc(c.id)}</span></td><td class="mono">${esc(c.where)}${c.computed_in?'<br><span style="color:var(--muted)">считается: '+esc(c.computed_in)+'</span>':''}</td><td style="font-size:12px">${esc(c.label)}</td><td>${c.shock==='direct'?'напрямую':'через допущения'}</td><td class="n">${c.depends_on_inputs}</td><td style="font-size:12px">${esc(c.found_by)}${c.confidence<0.6?' · <span style="color:#b3261e">проверить</span>':''}${c.note?'<br>'+esc(c.note):''}</td></tr>`).join('');
+  const params=(d.parameters||[]).map(p=>`<tr><td>${esc(p.name)}</td><td class="mono">${esc(p.ref)}</td><td>${esc(p.factor)}${p.sub?' / '+esc(p.sub):''}</td><td style="font-size:12px">${esc(Object.entries(p.values||{}).slice(0,3).map(([k,v])=>k+': '+v).join(' · '))}</td></tr>`).join('');
+  add(el(`<div class="chart"><h4>Справочник модели · показатели: где лежат и как шокируются</h4>
+    <table class="t"><tr><th>Показатель</th><th>Где</th><th>Подпись в модели</th><th>Шок</th><th style="text-align:right">Допущений</th><th>Как найден</th></tr>${rows}</table>
+    ${d.missing&&d.missing.length?`<div class="kv" style="margin-top:6px">Не найдены: ${d.missing.map(esc).join(', ')}</div>`:''}
+    ${params?`<h4 style="margin-top:10px">Параметры-допущения (${d.parameters_found})</h4><table class="t"><tr><th>Параметр</th><th>Где</th><th>Фактор</th><th>Значения</th></tr>${params}</table>`:''}
+    ${(d.warnings||[]).map(w=>`<div class="kv" style="color:#9a5a00;margin-top:6px">⚠ ${esc(w)}</div>`).join('')}</div>`));
+}
+
 function renderCard(d){
   const c=d.card;
   const sheets = c.sheets.filter(s=>s.role!=='separator').map(s=>`<span class="pill r-${s.role}" title="${s.formulas} формул${s.years?', '+s.years[0]+'–'+s.years[1]:''}">${esc(s.name)}</span>`).join('');
-  const metrics = c.key_metrics.map(m=>`<div class="metric"><b>${esc(m.metric)}</b> → ${m.candidates.map(x=>`<span class="mono">${esc(x.sheet)}!${x.row}</span>`).join(', ')}</div>`).join('');
+  const metrics = kmHtml(c);
+  const notes = (c.alt_sets||[]).map(a=>`<div class="metric">Наборы допущений: ${a.sheets.map(esc).join(', ')} — выбран <b>${a.active.map(esc).join(', ')}</b>${a.detected?' (проверено пересчётом)':' (предположительно)'}</div>`).join('')
+    + (c.warnings||[]).map(w=>`<div class="metric" style="color:#9a5a00">⚠ ${esc(w)}</div>`).join('');
   const drivers = c.drivers.slice(0,10).map(x=>`<div class="metric"><span class="mono">${esc(x.sheet)}!${x.row}</span> ${esc(x.label)}</div>`).join('');
   const flows = c.sheet_flows.slice(0,8).map(f=>`<div class="metric">${esc(f.from)} → ${esc(f.to)} <span style="color:var(--muted)">(${f.refs})</span></div>`).join('');
   $('#card').innerHTML = `
@@ -378,8 +394,9 @@ function renderCard(d){
     ${d.engine?'':`<div class="sec warn">Пересчёт недоступен: ${esc(d.engine_error||'')}. Работают поиск и чтение, стресс-тесты — нет.</div>`}
     <div class="sec"><h3>Смысл модели: экономические факторы</h3><div id="semBox"></div></div>
     <div class="sec"><h3>Листы по ролям</h3><div class="sheetlist">${sheets}</div></div>
-    <div class="sec"><h3>Ключевые метрики (кандидаты)</h3>${metrics||'<div class="kv">не найдены</div>'}</div>
-    <div class="sec"><h3>Возможные драйверы</h3>${drivers||'<div class="kv">не найдены</div>'}</div>
+    <div class="sec"><h3>Справочник показателей</h3><div id="kmBox">${metrics||'<div class="kv">не найдены</div>'}</div></div>
+    ${notes?`<div class="sec"><h3>Особенности книги</h3>${notes}</div>`:''}
+    <div class="sec"><h3>Главные допущения</h3>${drivers||'<div class="kv">не найдены</div>'}</div>
     <div class="sec"><h3>Потоки между листами</h3>${flows}</div>`;
 }
 
@@ -485,6 +502,8 @@ function handle(ev, d, ctx){
   else if(ev==='semmap'){ renderSemMap(d, body); }
   else if(ev==='deps'){ renderDeps(d, body); }
   else if(ev==='semantics'){ renderSem(d,'done'); }
+  else if(ev==='card'){ if($('#kmBox')) $('#kmBox').innerHTML=kmHtml(d); }
+  else if(ev==='catalog'){ renderCatalog(d, body); }
   else if(ev==='answer'){
     const a=add(el(`<div class="answer">${md(d.text)}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><a class="btn" data-k="docx" href="#">⬇ Word (.docx)</a><a class="btn" data-k="md" href="#">⬇ Markdown (.md)</a></div></div>`), body);
     const fname = d.report ? 'Заключение_КПКИ' : 'Копилот_ответ';
@@ -574,7 +593,7 @@ async function direct(kind, force=false){
   await streamInto('/api/direct', {session_id:SID, kind, force, ...llm()}, ctx);
   running=false; $('#send').disabled=false; chipsRender();
 }
-const ROLE_COL={inputs:'#1553b0',outputs:'#137a3e',dashboard:'#9a5a00',assumptions:'#6b4fc9',contents:'#9aa4b0'};
+const ROLE_COL={inputs:'#1553b0',report:'#137a3e',outputs:'#137a3e',contents:'#9aa4b0'};
 function renderMap(d, body){
   const layers={}; d.sheets.forEach(s=>{ (layers[s.layer]=layers[s.layer]||[]).push(s); });
   const L=Object.keys(layers).map(Number).sort((a,b)=>a-b); const maxN=Math.max(...L.map(l=>layers[l].length));
@@ -590,7 +609,7 @@ function renderMap(d, body){
       <text x="${p.x+7}" y="${p.y+14}" font-size="10.5" font-weight="700" fill="#1c2733">${esc(s.sheet.length>17?s.sheet.slice(0,16)+'…':s.sheet)}</text>
       <text x="${p.x+7}" y="${p.y+27}" font-size="9" fill="${c}">${s.role} · ${s.formulas.toLocaleString('ru-RU')} ф. · ${s.inputs} доп.</text></g>`; });
   svg+='</svg>';
-  const mt=`<table class="t"><tr><th>Метрика</th><th>Ячейка</th><th style="text-align:right">Влияющих допущений</th><th style="text-align:right">Доля вне Inputs</th><th>Где лежат драйверы</th></tr>${d.metrics.map(m=>`<tr><td>${esc(m.metric)}</td><td class="mono">${esc(m.ref)}</td><td class="n">${m.upstream_inputs}</td><td class="n"><b>${m.outside_inputs_share==null?'—':(m.outside_inputs_share*100).toFixed(0)+'%'}</b></td><td>${Object.entries(m.by_sheet).slice(0,5).map(([k,v])=>`<span class="pill r-calc">${esc(k)} ${v}</span>`).join('')}</td></tr>`).join('')}</table>`;
+  const mt=`<table class="t"><tr><th>Метрика</th><th>Ячейка</th><th style="text-align:right">Влияющих допущений</th><th style="text-align:right">Доля вне листов-источников</th><th>Где лежат драйверы</th></tr>${d.metrics.map(m=>`<tr><td>${esc(m.metric)}</td><td class="mono">${esc(m.ref)}</td><td class="n">${m.upstream_inputs}</td><td class="n"><b>${m.outside_inputs_share==null?'—':(m.outside_inputs_share*100).toFixed(0)+'%'}</b></td><td>${Object.entries(m.by_sheet).slice(0,5).map(([k,v])=>`<span class="pill r-calc">${esc(k)} ${v}</span>`).join('')}</td></tr>`).join('')}</table>`;
   const cls=d.classes_total||{};
   add(el(`<div class="chart"><h4>Карта модели · слои листов от источников к итогам (наведите на лист или связь)</h4>
     <div class="kpis"><div class="kpi"><b>${d.sheets.length}</b><span>листов</span></div><div class="kpi"><b>${(cls.input||0)+(cls.mixed||0)}</b><span>строк-допущений</span></div><div class="kpi"><b>${cls.calc||0}</b><span>расчётных строк</span></div><div class="kpi"><b>${cls.link||0}</b><span>строк-ссылок</span></div></div>
@@ -860,7 +879,7 @@ const CJM=[['📂','Загрузка','копия модели, индекс, г
   ['💬','Исследование','любой вопрос — агент планирует шаги'],['⚡','Стресс и эксперт','пакет банка, карта зоны, новость'],['📑','Заключение КПКИ','фиксированный сценарий'],['⬇','Выгрузка','Word, Excel, Markdown']];
 const TOUR=[
   {sel:'#provider', stage:'Настройка', title:'Выберите «мозг» агента', html:'<p>OpenAI — для обезличенных моделей, <b>GigaChat</b> — для работы во внутреннем контуре с реальными данными клиента. Офлайн-сценарий — проверка без LLM.</p>'},
-  {sel:'#planLbl', stage:'Настройка', title:'Harness с планированием', html:'<p>Агент сначала строит план из 3–7 шагов, затем сам выбирает инструменты (их 24) и отмечает шаги. Выключите для коротких вопросов.</p>'},
+  {sel:'#planLbl', stage:'Настройка', title:'Harness с планированием', html:'<p>Агент сначала строит план из 3–7 шагов, затем сам выбирает инструменты (их 26) и отмечает шаги. Выключите для коротких вопросов.</p>'},
   {sel:'#drop', stage:'1 · Загрузка', title:'Загрузите модель Excel', html:'<p>Работаем с копией — исходный файл не меняется. За секунды строится индекс листов, шапки периодов (годы, кварталы, месяцы) и граф зависимостей всех формул.</p>'},
   {sel:'#eng', stage:'1 · Загрузка', title:'Живой пересчёт в Excel', html:'<p>Стрессы считаются настоящим Excel (xlwings) с итерациями до сходимости циклических ссылок. После каждого сценария модель восстанавливается.</p>'},
   {sel:'#semBox', stage:'2 · Экспресс-анализ', title:'Смысл модели', html:'<p>Каждая строка, влияющая на метрики, получает понятное название, описание и <b>экономический фактор</b>: цены, объёмы, курс, ставки, OPEX, CAPEX, налоги, долг + отраслевые подфакторы. Агент отвечает языком факторов, а не ячеек. Нажмите на фактор, чтобы увидеть его строки.</p>'},
