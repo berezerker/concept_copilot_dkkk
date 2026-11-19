@@ -21,7 +21,7 @@ from .llm import available_providers, make_client, LLMError
 app = FastAPI(title="Копилот ДККК · агент CashFlow")
 STATIC = os.path.join(config.ROOT, "static")
 SESSIONS: dict[str, Session] = {}
-APP_VERSION = "2026-11-03.1"
+APP_VERSION = "2026-11-14.1"
 if config.env_bool("CF_RECORD"):                     # запись сеанса для интерактивного демо (tools/build_demo.py)
     from .recorder import RecorderMiddleware
     app.add_middleware(RecorderMiddleware)
@@ -79,8 +79,9 @@ def _load_into_session(path, filename, session_id=None, keep=False):
     finally:
         if not keep:
             os.unlink(path)
-    from .workbook import semantics as sm
+    from .workbook import semantics as sm, manifest as mf
     return {"session_id": s.id, "card": card, "seconds": round(time.time() - t0, 1), "semantics": sm.summary(s.sem),
+            "manifest": mf.summary(s.manifest),
             "engine": s.engine.name if s.engine_open else None, "engine_error": s.engine_error}
 
 
@@ -112,8 +113,9 @@ def upload_path(req: PathIn):
     except Exception as e:
         BUS.end(oid, False, str(e)[:200])
         raise HTTPException(400, f"Не удалось прочитать модель: {type(e).__name__}: {e}")
-    from .workbook import semantics as sm
+    from .workbook import semantics as sm, manifest as mf
     return {"session_id": s.id, "card": card, "seconds": round(time.time() - t0, 1), "semantics": sm.summary(s.sem),
+            "manifest": mf.summary(s.manifest),
             "engine": s.engine.name if s.engine_open else None, "engine_error": s.engine_error}
 
 
@@ -230,12 +232,14 @@ class DirectIn(BaseModel):
     session_id: str
     kind: str
     force: bool = False
+    query: str | None = None
     provider: str = "mock"
     model: str | None = None
 
 
 DIRECT = {"map": ("model_map", "Карта модели"), "audit": ("audit_model", "Предпроверка"),
-          "deps": ("dependency_analysis", "Анализ зависимостей по факторам")}
+          "deps": ("dependency_analysis", "Анализ зависимостей по факторам"),
+          "params": ("find_parameters", "Реестр параметров модели")}
 
 DEPS_SYSTEM = """Ты — старший кредитный аналитик ДККК. Тебе дают результаты автоматического анализа финансовой модели
 заёмщика: доли экономических факторов в чувствительности ключевых метрик, выводы и сцепки факторов (что через что
@@ -267,6 +271,8 @@ def direct_run(req: DirectIn):
                 _ensure_sem(s, client, emit)
             t0 = _t.time()
             args = {"force": True} if req.force else {}
+            if req.kind == "params":
+                args = {"query": req.query or "", "limit": 400}
             emit("tool_start", {"id": "d1", "name": tool, "args": args})
             res = TOOL_MAP[tool]["fn"](s, args, emit)
             emit("tool_end", {"id": "d1", "name": tool, "ok": True, "seconds": round(_t.time() - t0, 1), "result": res})
@@ -280,16 +286,42 @@ def direct_run(req: DirectIn):
     return _sse(job, title, s.id)
 
 
-def _ensure_sem(s, client, emit):
-    """Описания строк делаем LLM по каждой модели: если ещё не сделаны — перед ходом агента."""
-    from .workbook import semantics as sm
-    if client.name == "mock" or (s.sem and s.sem.get("llm")):
-        return
-    emit("status", {"text": f"Разбираю смысл модели ({client.describe()})…"})
-    sm.enrich(s.sem, client, emit)
-    sm.refresh_formula_words(s.idx, s.sem, s.forecast_start)
-    sm.save(s.cache_dir, s.sem)
-    emit("semantics", sm.summary(s.sem))
+def _ensure_sem(s, client, emit, force=False):
+    """Смысл модели делает LLM по каждой модели, один раз (кэш по хэшу файла):
+    1) справочник — сопоставление показателей, которые не нашлись по названию (catalog.llm_map);
+    2) паспорт строк — деловые названия, описания, факторы (semantics.enrich).
+    Справочник идёт первым: от найденных показателей зависит, какие строки попадут в паспорт."""
+    from .workbook import catalog as cg, semantics as sm
+    if client.name == "mock":
+        return False
+    done = False
+    if s.catalog is not None and (force or not s.catalog.get("llm")):
+        before = {k: (v["primary"]["sheet"], v["primary"]["row"]) for k, v in s.catalog["concepts"].items()}
+        cg.llm_map(s.idx, s.catalog, client, s.forecast_start, emit)
+        cg.save(s.cache_dir, s.catalog)
+        after = {k: (v["primary"]["sheet"], v["primary"]["row"]) for k, v in s.catalog["concepts"].items()}
+        if after != before:
+            s.refresh_card()
+            if not (s.sem and s.sem.get("llm")) or force:
+                s.sem = sm.build_semantics(s.idx, s.card, s.forecast_start)
+            emit("card", s.card)
+        done = True
+    if force or not (s.sem and s.sem.get("llm")):
+        emit("status", {"text": f"Разбираю смысл модели ({client.describe()})…"})
+        if force:
+            s.sem = sm.build_semantics(s.idx, s.card, s.forecast_start)
+        sm.enrich(s.sem, client, emit)
+        from .logbus import BUS
+        BUS.check(s.id)
+        sm.refresh_formula_words(s.idx, s.sem, s.forecast_start)
+        sm.save(s.cache_dir, s.sem)
+        emit("semantics", sm.summary(s.sem))
+        done = True
+    if done:
+        from .workbook import manifest as mf
+        s.refresh_manifest()
+        emit("manifest", mf.summary(s.manifest))
+    return done
 
 
 def _session(session_id):
@@ -387,7 +419,7 @@ def defaults(session_id: str):
     for name, op, thr in DEFAULT_RULES:
         for c in km.get(name, [])[:1]:
             rules.append({"sheet": c["sheet"], "row": c["row"], "name": name, "op": op, "threshold": thr, "label": c["label"]})
-    metrics = [{"sheet": c["sheet"], "row": c["row"], "name": m, "label": c["label"]} for m, cs in km.items() for c in cs[:1]]
+    metrics = [{"sheet": c["sheet"], "row": c["row"], "name": m, "label": c["label"]} for m, cs in list(km.items())[:12] for c in cs[:1]]
     from .workbook import semantics as sm
     fields = [{"sheet": d["sheet"], "row": d["row"], "name": sm.name(s, d["sheet"], d["row"])[:60], "unit": d["unit"]}
               for d in s.card["drivers"][:15]]
@@ -409,22 +441,16 @@ def semantics(req: SemIn):
     from .workbook import semantics as sm
 
     def job(emit):
-        if s.sem and s.sem.get("llm") and not req.force:
-            emit("semantics", dict(sm.summary(s.sem), cached=True))
-            return
         if client.name == "mock":
             emit("semantics", dict(sm.summary(s.sem), offline=True))
             return
-        emit("progress", {"text": f"Разбор смысла модели: {len(s.sem['rows'])} строк, {client.describe()}…"})
-        sem = sm.build_semantics(s.idx, s.card, s.forecast_start) if req.force else s.sem
-        sm.enrich(sem, client, emit)
-        from .logbus import BUS
-        BUS.check(s.id)
-        sm.refresh_formula_words(s.idx, sem, s.forecast_start)
+        if s.sem and s.sem.get("llm") and (s.catalog or {}).get("llm") and not req.force:
+            emit("semantics", dict(sm.summary(s.sem), cached=True))
+            return
+        emit("progress", {"text": f"Разбор смысла модели: справочник показателей и {len(s.sem['rows'])} строк, {client.describe()}…"})
         with s.lock:
-            s.sem = sem
-        sm.save(s.cache_dir, sem)
-        emit("semantics", sm.summary(sem))
+            _ensure_sem(s, client, emit, force=req.force)
+        emit("semantics", sm.summary(s.sem))
     return _sse(job, "Разбор смысла модели", s.id)
 
 
@@ -469,6 +495,14 @@ def model_map(session_id: str):
     return _direct(session_id, "model_map")
 
 
+@app.get("/api/manifest/{session_id}")
+def model_manifest(session_id: str):
+    """Единый паспорт модели для UI и внешних интеграций."""
+    from .workbook import manifest as mf
+    s = _session(session_id)
+    return s.refresh_manifest() or mf.build(s)
+
+
 @app.get("/api/audit/{session_id}")
 def model_audit(session_id: str):
     """Предпроверка без LLM (кнопка в интерфейсе)."""
@@ -481,6 +515,16 @@ def reset(session_id: str):
     if s:
         s.history, s.plan = [], None
     return {"ok": True}
+
+
+@app.get("/api/params_xlsx/{session_id}")
+def params_xlsx(session_id: str):
+    """Реестр параметров модели — в Excel."""
+    from .workbook import params as pr
+    s = _session(session_id)
+    path = os.path.join(s.workdir, "parameters.xlsx")
+    pr.to_xlsx(s, path)
+    return FileResponse(path, filename="parameters_" + os.path.splitext(s.card["file"])[0] + ".xlsx")
 
 
 @app.get("/api/export/{session_id}")

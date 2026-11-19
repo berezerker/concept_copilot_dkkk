@@ -60,16 +60,17 @@ class MockClient(LLMClient):
         if len(searches) < 1 + len(metric_qs):
             return _call("search_rows", {"query": metric_qs[len(searches) - 1], "limit": 5})
 
-        def pick(rows, prefer=("Dashboard", "Assumptions"), need_deps=False):
-            rows = [r for r in rows if r.get("values") and (not need_deps or r.get("dependents", 0) > 0)]
-            for p in prefer:
-                for r in rows:
-                    if r["sheet"].lower().startswith(p.lower()):
-                        return r
+        def pick(rows, need_deps=False, kinds=None):
+            # без опоры на названия листов: драйвер — допущение, от которого что-то зависит; метрика — первая найденная
+            rows = [r for r in rows if (r.get("values") or r.get("cells")) and not r.get("inactive_set")
+                    and (not need_deps or r.get("dependents", 0) > 0)]
+            for r in rows:
+                if not kinds or r.get("kind") in kinds:
+                    return r
             return rows[0] if rows else None
 
-        drv = pick(searches[0]["rows"], need_deps=True)
-        mets = [pick(s["rows"], ("Dashboard", "Outputs", "КПКИ")) for s in searches[1:]]
+        drv = pick(searches[0]["rows"], need_deps=True, kinds=("input", "mixed"))
+        mets = [pick([r for r in s["rows"] if r.get("values")]) for s in searches[1:]]
         mets = [m for m in mets if m]
         if not drv or not mets:
             return LLMResponse(content="Не нашёл подходящих строк для драйвера или метрик. "

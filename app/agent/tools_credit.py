@@ -20,7 +20,7 @@ from ..workbook.periods import FREQ_N
 from .tools import METRIC_SCHEMA, SHOCK_SCHEMA, _metric_refs, rnd
 from .tools_ext import DRIVER_SCHEMA, OPS, RULE_SCHEMA, _agg, _base_series, _fy, _run, dlabel
 
-DRIVER_KEYS = ("sheet", "row", "cell", "range", "match", "factor", "sub", "include_formulas", "max_rows", "years")
+DRIVER_KEYS = ("sheet", "row", "cell", "range", "match", "factor", "sub", "concept", "mode", "via", "include_formulas", "max_rows", "years")
 
 
 def _drv(d):
@@ -436,8 +436,8 @@ def t_debt_capacity(s, a, emit):
 PART_SCHEMA = {"type": "object", "properties": {
     "sheet": {"type": "string"}, "row": {"type": "integer"}, "name": {"type": "string"},
     "sign": {"type": "number", "description": "+1 прибавить, −1 вычесть"},
-    "abs": {"type": "boolean", "description": "Брать модуль значения (для расходов, которые в модели могут быть с минусом)"}},
-    "required": ["sheet", "row"]}
+    "abs": {"type": "boolean", "description": "Брать модуль значения (для расходов, которые в модели могут быть с минусом)"},
+    "concept": {"type": "string", "description": "Показатель из справочника (cfads, debt_service, debt…) вместо sheet+row"}}}
 PACK_DRIVER_SCHEMA = {"type": "object", "properties": DRIVER_SCHEMA["properties"] | {
     "category": {"type": "string", "enum": list(PACK), "description": "Тип драйвера — задаёт стандартные шоки пакета"},
     "op": {"type": "string", "enum": ["pct", "add", "set", "shift"]},

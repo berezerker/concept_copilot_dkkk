@@ -30,7 +30,7 @@ feature/…       ●──●            ●─●             одна зад�
 4. Перед PR — быстрые тесты (одна минута, без Excel и сети):
    ```
    python tests/test_tools.py && python tests/test_credit.py && python tests/test_connectors.py \
-     && python tests/test_excel_engine.py && python tests/test_grading.py
+     && python tests/test_excel_engine.py && python tests/test_grading.py && python tests/test_manifest.py
    ```
 5. PR в `develop`, описание: что поменялось и как проверено. Слияние — squash, ветку удалить.
 

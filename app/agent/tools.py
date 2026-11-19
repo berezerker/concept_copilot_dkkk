@@ -8,7 +8,8 @@ import difflib
 import math
 import re
 
-from ..workbook.card import numeric_years, ref_for
+from ..workbook.card_utils import numeric_years, ref_for
+from ..workbook.modelmap import is_scalar_row, row_class, scalar_cols
 from ..workbook.periods import norm_period, norm_periods
 
 MAX_SCENARIOS, MAX_METRICS, MAX_SHOCKS, MAX_ROWS = 12, 8, 10, 25
@@ -79,6 +80,17 @@ def row_kind(idx, sheet, row, years=None):
     return "formula" if nf else ("input" if nc else "text")
 
 
+def _scalar_cells(sh, ri, only_inputs=False):
+    """Числовые ячейки одиночного параметра: {адрес: значение}."""
+    from ..workbook.index import col_letter
+    out = {}
+    for c in scalar_cols(sh, ri):
+        v = ri.values.get(c)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and not (only_inputs and c in ri.formulas):
+            out[f"{col_letter(c)}{ri.row}"] = rnd(v)
+    return dict(list(out.items())[:12])
+
+
 def years_slice(d: dict, years=None, start=None, max_n=14):
     items = sorted(d.items())
     if years:
@@ -123,6 +135,56 @@ def t_get_model_card(s, a, emit):
     return c
 
 
+def t_get_model_manifest(s, a, emit):
+    """Единый паспорт модели: готовность, показатели, параметры, зоны, связи и ограничения."""
+    from ..workbook import manifest as mf
+    manifest = s.refresh_manifest() or mf.build(s)
+    section = a.get("section") or "summary"
+    query = norm(a.get("query") or "")
+    limit = max(1, min(int(a.get("limit", 40) or 40), 200))
+    if section == "summary":
+        payload = mf.summary(manifest)
+    elif section == "metrics":
+        rows = manifest["metrics"]
+        if query:
+            rows = [x for x in rows if query in norm(x["name"]) or query in norm(x["catalog_id"])
+                    or query in norm(x["location"]["label"])]
+        payload = {"readiness": manifest["readiness"], "metrics": rows[:limit], "found": len(rows)}
+    elif section == "parameters":
+        rows = manifest["parameters"]
+        if query:
+            rows = [x for x in rows if any(query in norm(v) for v in
+                    (x["name"], x["location"]["label"], x["location"]["block"], x["factor"]["name"],
+                     x["location"]["ref"]))]
+        payload = {"readiness": manifest["readiness"], "parameters": rows[:limit], "found": len(rows)}
+    elif section == "zones":
+        payload = {"zones": manifest["zones"][:limit], "edges": manifest["edges"][:limit],
+                   "found": len(manifest["zones"]), "readiness": manifest["readiness"]}
+    elif section == "scenarios":
+        payload = {"scenario_sets": manifest["scenario_sets"], "switches": manifest["switches"],
+                   "readiness": manifest["readiness"]}
+    elif section == "limitations":
+        payload = {"limitations": manifest["limitations"], "readiness": manifest["readiness"]}
+    elif section == "full":
+        payload = dict(manifest)
+        payload["parameters"] = payload["parameters"][:limit]
+        payload["parameters_total"] = len(manifest["parameters"])
+        payload["edges"] = payload["edges"][:limit]
+    else:
+        raise ValueError("section: summary, metrics, parameters, zones, scenarios, limitations или full")
+    emit("manifest", payload)
+    return payload
+
+
+def t_resolve_target(s, a, emit):
+    """Слова пользователя → однозначная сущность manifest либо список кандидатов для уточнения."""
+    from ..workbook import manifest as mf
+    if getattr(s, "manifest", None) is None:
+        s.refresh_manifest()
+    return mf.resolve(s, a["query"], a.get("kind", "auto"), a.get("intent", "read"),
+                      int(a.get("limit", 8) or 8))
+
+
 def t_list_sheets(s, a, emit):
     out = []
     for sh in s.idx.sheets.values():
@@ -145,38 +207,55 @@ def t_search_rows(s, a, emit):
     for sh in s.idx.sheets.values():
         if only_sheet and norm(sh.name) != norm(only_sheet):
             continue
-        if not sh.years:
+        if sh.role in ("contents", "separator"):
             continue
         for ri in sh.rows.values():
             lab = norm(ri.label)
-            if not lab:
+            if not lab or ri.row in sh.headers:
                 continue
             matched = sum(1 for g in groups if any(t in lab for t in g))
             if groups and matched == 0:
                 continue
             nums = numeric_years(s.idx, sh.name, ri.row)
+            cells = None
             if len(nums) < 2:
-                continue
-            kind = row_kind(s.idx, sh.name, ri.row, {y for y in sh.years_for(ri.row).values() if s.forecast_start and y >= s.forecast_start} or None)
+                if not is_scalar_row(sh, ri):
+                    continue
+                cells = _scalar_cells(sh, ri)               # одиночный параметр: «Ставка налога | 20%»
+                if not cells:
+                    continue
+                kind = {"input": "input", "mixed": "input"}.get(row_class(s.idx, sh.name, ri.row, s.forecast_start), "formula")
+            else:
+                kind = row_kind(s.idx, sh.name, ri.row, {y for y in sh.years_for(ri.row).values() if s.forecast_start and y >= s.forecast_start} or None)
             if only_inputs and kind not in ("input", "mixed"):
                 continue
-            score = matched * 3 + difflib.SequenceMatcher(None, q, lab[:80]).ratio() * 2
-            score += {"dashboard": 1.0, "outputs": 0.8, "assumptions": 0.6}.get(sh.role, 0) - len(lab) / 200
+            deps = len(s.idx.dependents.get((sh.name, ri.row), ()))
+            score = matched * 3 + difflib.SequenceMatcher(None, q, lab[:80]).ratio() * 2 - len(lab) / 200
+            score += 0.6 if deps else -0.6                  # строка, от которой что-то зависит, полезнее справочной
+            if sh.name in s.idx.inactive:
+                score -= 2                                  # невыбранный набор сценария
             if norm(sh.name) in q:
                 score += 1
-            hits.append((score, sh.name, ri.row, ri.label, ri.unit, kind, nums))
+            hits.append((score, sh.name, ri.row, ri.label, ri.unit, kind, nums, cells))
     hits.sort(key=lambda x: -x[0])
     out = []
-    for sc, sh, r, lab, unit, kind, nums in hits[:limit]:
+    for sc, sh, r, lab, unit, kind, nums, cells in hits[:limit]:
         from ..workbook.semantics import info as _hinfo
         hi = _hinfo(s, sh, r)
-        out.append({"sheet": sh, "row": r, "label": lab[:120], "name": hi["name"], "factor": hi["factor_name"],
-                    "meaning": hi["desc"] or None, "unit": unit, "kind": kind,
-                    "dependents": len(s.idx.dependents.get((sh, r), ())),
-                    "values": years_slice(nums, start=s.forecast_start, max_n=6)})
+        row = {"sheet": sh, "row": r, "label": lab[:120], "name": hi["name"], "factor": hi["factor_name"],
+               "meaning": hi["desc"] or None, "unit": unit, "kind": kind,
+               "dependents": len(s.idx.dependents.get((sh, r), ())),
+               "values": years_slice(nums, start=s.forecast_start, max_n=6)}
+        if cells:
+            row["cells"] = cells
+            row["scalar"] = True
+        if sh in s.idx.inactive:
+            row["inactive_set"] = True
+        out.append(row)
     return {"query": query, "found": len(hits), "rows": out,
             "note": "kind: input — числа (можно шоковать), formula — расчёт, mixed — факт числами, прогноз формулами; "
-                    "dependents — сколько строк напрямую ссылаются на эту (0 = строка ни на что не влияет, шоковать бесполезно)"}
+                    "dependents — сколько строк напрямую ссылаются на эту (0 = строка ни на что не влияет, шоковать бесполезно); "
+                    "scalar — параметр одной ячейкой (шок по sheet+row меняет её); inactive_set — лист невыбранного сценария"}
 
 
 def t_read_rows(s, a, emit):
@@ -284,8 +363,17 @@ def _shock_cols(s, sheet, row, years):
     if not ri:
         raise ValueError(f"Строка {sheet}!{row} пуста")
     ym = sh.years_for(row)
+    if is_scalar_row(sh, ri):
+        # одиночный параметр (ставка, коэффициент, цена одной ячейкой): шок меняет введённые числа строки;
+        # если в строке только формула — подменяем её значение
+        sc = scalar_cols(sh, ri)
+        typed = [c for c in sc if c not in ri.formulas]
+        cols = {c: None for c in (typed or sc) if isinstance(ri.values.get(c), (int, float)) and not isinstance(ri.values.get(c), bool)}
+        if not cols:
+            raise ValueError(f"В строке {sh.name}!{row} нет числового значения")
+        return sh, ri, dict(sorted(cols.items()))
     if not ym:
-        raise ValueError(f"На листе «{sheet}» не найден заголовок с годами")
+        raise ValueError(f"На листе «{sh.name}» нет шапки периодов, и строка {row} не похожа на параметр — задай шок через cell или range")
     if years:
         sel = set(norm_periods(years))
         cols = {c: y for c, y in ym.items() if y in sel}
@@ -293,7 +381,7 @@ def _shock_cols(s, sheet, row, years):
         cols = {c: y for c, y in ym.items() if s.forecast_start is None or y >= s.forecast_start}
     cols = {c: y for c, y in cols.items() if c in ri.formulas or isinstance(ri.values.get(c), (int, float))}
     if not cols:
-        raise ValueError(f"В строке {sheet}!{row} нет числовых значений за указанные годы")
+        raise ValueError(f"В строке {sh.name}!{row} нет числовых значений за указанные годы")
     return sh, ri, dict(sorted(cols.items()))
 
 
@@ -324,15 +412,13 @@ def _match_rows(s, query, sheet=None, include_formulas=False, max_rows=20):
                 g |= {x.strip() for x in syn if len(x.strip()) >= 3}
         return re.compile(r"(?<![а-яa-z0-9])(" + "|".join(re.escape(x) for x in g) + ")")
     pats = [group(t) for t in toks]
-    inputs_sheets = sorted((n for n, x in s.idx.sheets.items() if x.role == "inputs"), key=len)
-    primary_inputs = inputs_sheets[0] if inputs_sheets else None
     out = []
     for sh in s.idx.sheets.values():
         if sheet and norm(sh.name) != norm(sheet):
             continue
-        if sh.role in ("contents", "separator") or (sh.role == "outputs" and not sheet):
+        if sh.role in ("contents", "separator"):
             continue
-        if sh.role == "inputs" and not sheet and sh.name != primary_inputs:   # альтернативные наборы Inputs
+        if sh.name in s.idx.inactive and not sheet:           # невыбранные наборы сценариев на результат не влияют
             continue
         for r, ri in sh.rows.items():
             if r in sh.headers or r == sh.header_row:
@@ -343,18 +429,118 @@ def _match_rows(s, query, sheet=None, include_formulas=False, max_rows=20):
             if not s.idx.dependents.get((sh.name, r)):
                 continue
             kind = row_kind(s.idx, sh.name, r)
+            scalar = is_scalar_row(sh, ri)
+            if scalar:
+                kind = "input" if row_class(s.idx, sh.name, r, s.forecast_start) == "input" else "formula"
             if kind in ("input", "mixed") or (include_formulas and kind == "formula"):
                 ys = [y for y in numeric_years(s.idx, sh.name, r) if not s.forecast_start or y >= s.forecast_start]
-                if ys:
+                if ys or scalar:
                     out.append((sh.name, r))
     return out[:max_rows], len(out)
 
 
+def _verify_direct(s, e, notes):
+    """Способ шока direct выбран по графу формул, а граф может обещать лишнее (переключатели, INDEX/MATCH).
+    Один раз на показатель проверяем пересчётом: подменяем показатель на −10 % и смотрим, сдвинулись ли итоги,
+    до которых он должен дойти. Не сдвинулись — строка справочная, шокируем через допущения. Итог запоминается."""
+    from ..workbook import catalog as cg
+    if e.get("direct_verified") is not None or not s.engine_open:
+        return "direct" if e.get("direct_verified", True) else "drivers"
+    targets = [r for r in (e.get("reaches") or []) + ["ebitda", "net_income"] if r in s.catalog["concepts"] and r != e["id"]]
+    targets = list(dict.fromkeys(targets))[:6]
+    if not targets:
+        return "direct"
+    try:
+        mref = _metric_refs(s, [{"concept": r} for r in targets], None)
+        reads = [r for m in mref for r in m["refs"]]
+        base = _read_metrics(s.engine.read(reads), mref)
+        ov, _, _, _ = _build_overrides(s, [{"sheet": e["origin"]["sheet"], "row": e["origin"]["row"], "op": "pct", "value": -10, "_quiet": True}], None)
+        got = _read_metrics(s.engine.scenario(ov, reads, reads)[0], mref)
+        moved = [t_ for t_, b, g in zip(targets, base, got)
+                 if any(b.get(y) is not None and g.get(y) is not None and abs(g[y] - b[y]) > 1e-6 * max(abs(b[y]), 1e-9) for y in b)]
+    except Exception:
+        return "direct"                       # проверить не удалось — остаёмся при выводе по графу
+    e["direct_verified"] = bool(moved)
+    e["reaches"] = moved
+    if not moved:
+        e["shock"] = "drivers"
+        e["note"] = "прямая подмена строки не меняет итоги (проверено пересчётом) — шок выполняется через допущения"
+        notes.append(f"«{e['name']}»: подмена строки {e['origin']['sheet']}!{e['origin']['row']} не меняет итоговые показатели "
+                     "(проверено пересчётом) — шок выполнен через допущения, из которых показатель считается")
+    cg.save(s.cache_dir, s.catalog)
+    s.refresh_manifest()
+    return "direct" if moved else "drivers"
+
+
+def _concept_shock(s, sh_, notes):
+    """Шок по показателю справочника («выручка −10 %»): напрямую или через допущения."""
+    from ..workbook import catalog as cg, semantics as sm
+    from ..workbook.modelmap import upstream_inputs
+    e = cg.resolve(s, sh_["concept"])
+    mode = sh_.get("mode") or e["shock"]
+    if mode == "direct" and not sh_.get("mode") and e["kind"] != "ratio":
+        mode = _verify_direct(s, e, notes)
+    op, value = sh_.get("op", "pct"), float(sh_.get("value", 0))
+    o = e["origin"]
+    keep = {k: v for k, v in sh_.items() if k in ("op", "value", "years")}
+    if mode == "direct":
+        if e["kind"] == "ratio":
+            raise ValueError(f"«{e['name']}» — коэффициент, его нельзя задать напрямую: шокируй показатели, из которых он "
+                             "считается (mode=drivers или отдельные показатели/факторы).")
+        reach = [cg.BY_ID[r]["name"] for r in e.get("reaches") or [] if r in cg.BY_ID]
+        notes.append(f"Показатель «{e['name']}» изменён напрямую в строке {o['sheet']}!{o['row']} «{o['label'][:40]}» (формула на время сценария "
+                     "заменена значениями). Пересчитано всё, что считается ОТ этого показателя"
+                     + (f" (в т.ч. {', '.join(reach[:5])})" if reach else "")
+                     + "; то, что считается от его составляющих напрямую (например, затраты от объёма), не меняется.")
+        return [dict(keep, sheet=o["sheet"], row=o["row"])]
+    # ── через допущения: меняем строки-допущения, из которых считается показатель ──
+    if op != "pct":
+        raise ValueError("Шок показателя через допущения (mode=drivers) задаётся в процентах (op=pct)")
+    via = sh_.get("via") or e.get("via") or sorted(sm.MARKET)
+    ups, _ = upstream_inputs(s.idx, o["sheet"], o["row"], s.forecast_start)
+    ups = [u for u in ups if u["fanout"]]
+    rows = [u for u in ups if sm.info(s, u["sheet"], u["row"])["factor"] in via]
+    if not rows:
+        rows = ups
+        notes.append(f"«{e['name']}»: допущений факторов {', '.join(via)} выше показателя нет — изменены все его допущения")
+    if not rows:
+        raise ValueError(f"У показателя «{e['name']}» ({o['sheet']}!{o['row']}) нет допущений выше по расчёту: шокируй его напрямую (mode=direct)")
+    rows = sorted(rows, key=lambda u: -u["fanout"])[:200]
+    mk = lambda v: [dict({k: x for k, x in keep.items() if k != "value"}, value=v, sheet=u["sheet"], row=u["row"], _quiet=True) for u in rows]  # noqa: E731
+    pct = value
+    if sh_.get("calibrate", True) and s.engine_open and e["kind"] != "ratio" and value:
+        # подгонка: на сколько изменить допущения, чтобы сам показатель изменился на заданный процент
+        ckey = ("_calib", e["id"], tuple(sorted(via)), tuple(sh_.get("years") or ()))
+        ratio = s.base_cache.get(ckey)
+        if ratio is None:
+            mref = _metric_refs(s, [{"sheet": o["sheet"], "row": o["row"]}], sh_.get("years"))
+            reads = [r for m in mref for r in m["refs"]]
+            base = _read_metrics(s.engine.read(reads), mref)[0]
+            ov, _, _, _ = _build_overrides(s, mk(value), None)
+            got = _read_metrics(s.engine.scenario(ov, reads, reads)[0], mref)[0]
+            fs_ = s.forecast_start                             # сравниваем только периоды, в которых был шок
+            ch = [(got[y] - b) / abs(b) for y, b in base.items() if b not in (None, 0) and got.get(y) is not None
+                  and abs(b) > 1e-12 and (sh_.get("years") or fs_ is None or y >= fs_)]
+            ratio = (sum(ch) / len(ch) * 100 / value) if ch else 0.0
+            s.base_cache[ckey] = ratio
+        if abs(ratio) < 1e-6:
+            raise ValueError(f"Допущения ({', '.join(via)}) не меняют «{e['name']}»: выбери другие факторы (via) или mode=direct")
+        pct = max(-95.0, min(500.0, value / ratio))
+        notes.append(f"«{e['name']}» {value:+g}% получен через допущения ({', '.join(via)}; {len(rows)} строк): они изменены на "
+                     f"{pct:+.3g}% — подобрано пробным пересчётом, в среднем за период; точное изменение показателя по годам смотри в таблице")
+    else:
+        notes.append(f"«{e['name']}»: на {value:+g}% изменены его допущения ({', '.join(via)}; {len(rows)} строк) — сам показатель "
+                     "изменится на другую величину")
+    return mk(pct)
+
+
 def _expand_shocks(s, shocks, notes):
-    """match → набор строк; остальные шоки — как есть."""
+    """concept / factor / match → набор строк; остальные шоки — как есть."""
     out = []
     for sh_ in shocks:
-        if sh_.get("factor") or sh_.get("sub"):                     # экономический фактор из смыслового слоя
+        if sh_.get("concept") and not sh_.get("row"):
+            out += _concept_shock(s, sh_, notes)
+        elif sh_.get("factor") or sh_.get("sub"):                     # экономический фактор из смыслового слоя
             from ..workbook import semantics as sm
             rows = sm.factor_rows(s, sh_.get("factor"), sh_.get("sub"))
             what = sh_.get("sub") or sh_.get("factor")
@@ -449,7 +635,7 @@ def _build_overrides(s, shocks, metric_nodes=None):
             notes.append(f"Пропущена строка фактора: {e}")
             continue
         if metric_nodes and not sh_.get("_quiet"):
-            hit = reachable(s.idx, (sh.name, row), metric_nodes)
+            hit = reachable(s.idx, (sh.name, row), metric_nodes) | ({(sh.name, row)} & set(metric_nodes))
             if not hit:
                 hint = _sources_hint(s.idx, sh.name, row)
                 unreach.append(
@@ -478,6 +664,8 @@ def _build_overrides(s, shocks, metric_nodes=None):
                 vc[key] = [got[r] for r in refs]
             base = vc[key]
         flat = [v for block in base for line in block for v in line]
+        if op == "shift" and all(y is None for y in cols.values()):
+            raise ValueError(f"{sh.name}!{row} — одиночный параметр, сдвигать во времени нечего")
         if op == "shift":                                    # сдвиг ряда во времени (задержка запуска/CAPEX)
             n = int(round(value))
             nums = [v if isinstance(v, (int, float)) else 0.0 for v in flat]
@@ -498,7 +686,9 @@ def _build_overrides(s, shocks, metric_nodes=None):
             notes.append(f"{sh.name}!{row}: формулы в шокируемых ячейках временно заменены значениями")
         what = f"сдвиг на {int(round(value)):+d} пер." if op == "shift" else (f"{value:+g}%" if op == "pct" else f"{op} {value:g}")
         from ..workbook.semantics import name as _hname
-        desc.append(f"«{_hname(s, sh.name, row)[:60]}» {what} за {min(cols.values())}–{max(cols.values())} ({sh.name}!{row})")
+        ys_ = [y for y in cols.values() if y is not None]
+        span = f"за {min(ys_)}–{max(ys_)}" if ys_ else "(параметр)"
+        desc.append(f"«{_hname(s, sh.name, row)[:60]}» {what} {span} ({sh.name}!{row})")
     if len(desc) > 8:
         desc = desc[:6] + [f"… и ещё {len(desc) - 6} строк"]
     return _merge_overrides(overrides), desc, notes, unreach
@@ -535,6 +725,10 @@ def _merge_overrides(overrides):
 def _metric_refs(s, metrics, years):
     out = []
     for m in metrics[:MAX_METRICS]:
+        if m.get("concept") and not m.get("sheet"):           # показатель по справочнику
+            from ..workbook import catalog as cg
+            e = cg.resolve(s, m["concept"])
+            m = dict(m, sheet=e["primary"]["sheet"], row=e["primary"]["row"], name=m.get("name") or e["name"])
         sh = s.idx.sheet(m["sheet"])
         row = int(m["row"])
         ri = sh.rows.get(row)
@@ -697,6 +891,9 @@ SHOCK_SCHEMA = {
         "match": {"type": "string", "description": "Вместо row: смысловой запрос — шок ко ВСЕМ строкам-допущениям с такой подписью по всей модели (например 'тариф' или 'Urals'); sheet сужает поиск"},
         "factor": {"type": "string", "description": "Вместо row: экономический фактор из смыслового слоя (price_sales, volume, fx, rate, opex, capex, tax, debt, …) — шок ко всем его строкам-допущениям сразу. Список факторов — в карточке модели"},
         "sub": {"type": "string", "description": "Вместо factor: отраслевой подфактор (например crude_price, power_price, capacity)"},
+        "concept": {"type": "string", "description": "Вместо row: показатель из справочника модели (revenue, ebitda, capex, opex, debt, … или его название) — агент сам знает, где он лежит. Список — в справочнике (get_catalog)"},
+        "mode": {"type": "string", "enum": ["direct", "drivers"], "description": "Для concept: direct — подменить сам показатель (всё, что считается от него, пересчитается); drivers — изменить допущения, из которых он считается, так, чтобы показатель изменился на value %. По умолчанию — как указано в справочнике"},
+        "via": {"type": "array", "items": {"type": "string"}, "description": "Для concept+drivers: через какие факторы менять показатель (например ['price_sales'] — только ценами)"},
         "include_formulas": {"type": "boolean", "description": "Для match: шоковать и расчётные строки"},
         "max_rows": {"type": "integer", "description": "Для match: максимум строк (по умолчанию 20)"},
         "op": {"type": "string", "enum": ["pct", "add", "mul", "set", "shift"],
@@ -709,10 +906,114 @@ SHOCK_SCHEMA = {
 }
 METRIC_SCHEMA = {
     "type": "object",
-    "properties": {"sheet": {"type": "string"}, "row": {"type": "integer"},
+    "description": "Метрика: либо concept (показатель из справочника: dscr, net_debt_ebitda, revenue…), либо sheet+row",
+    "properties": {"concept": {"type": "string", "description": "id или название показателя из справочника модели"},
+                   "sheet": {"type": "string"}, "row": {"type": "integer"},
                    "name": {"type": "string", "description": "Короткое имя метрики"}},
-    "required": ["sheet", "row"],
 }
+
+
+# ───────────────────────── справочник модели ─────────────────────────
+def resolve_concepts(s, args, _key=None):
+    """Всюду, где инструмент ждёт метрику или ковенант (sheet+row), можно передать concept — подставляем строку
+    из справочника. Цели шоков (shocks/drivers) не трогаем: их разбирает _expand_shocks (там важен способ шока)."""
+    if isinstance(args, list):
+        return [resolve_concepts(s, x, _key) for x in args]
+    if not isinstance(args, dict):
+        return args
+    if _key in ("shocks", "shock", "drivers", "driver", "x", "y", "scenarios", "fields"):
+        return {k: (resolve_concepts(s, v, k) if k in ("metrics", "metric", "rules", "rule") else v) for k, v in args.items()}
+    out = {k: resolve_concepts(s, v, k) for k, v in args.items()}
+    if out.get("concept") and not out.get("sheet") and out.get("row") in (None, "") and _key is not None:
+        from ..workbook import catalog as cg
+        e = cg.resolve(s, out["concept"])
+        out.update(sheet=e["primary"]["sheet"], row=e["primary"]["row"])
+        out.setdefault("name", e["name"])
+    return out
+
+
+def t_get_catalog(s, a, emit):
+    """Справочник модели: показатели (где лежат и как шокируются), факторы и параметры-допущения."""
+    from ..workbook import catalog as cg, semantics as sm
+    cat = s.catalog
+    q = norm(a.get("query") or "")
+    group, factor = a.get("group"), a.get("factor")
+    concepts = []
+    for e in cat["concepts"].values():
+        if group and e["group"] != group:
+            continue
+        if q and q not in norm(e["name"]) and q not in e["id"] and q not in norm(e["primary"]["label"]):
+            continue
+        p, o = e["primary"], e["origin"]
+        concepts.append({"id": e["id"], "name": e["name"], "group": cg.GROUPS.get(e["group"], e["group"]), "kind": e["kind"],
+                         "where": f"{p['sheet']}!{p['row']}", "label": p["label"][:70], "unit": p["unit"],
+                         "computed_in": f"{o['sheet']}!{o['row']}" if (o["sheet"], o["row"]) != (p["sheet"], p["row"]) else None,
+                         "shock": e["shock"], "direct_shock_reaches": [cg.BY_ID[r]["name"] for r in e.get("reaches", []) if r in cg.BY_ID],
+                         "depends_on_inputs": e["inputs"], "found_by": e["match"], "confidence": e["confidence"],
+                         "note": e.get("note") or (None if e["live"] else "не зависит от допущений — значения вставлены"),
+                         "alternatives": [f"{x['sheet']}!{x['row']} «{x['label'][:40]}»" for x in e["alternatives"][:3]] or None})
+    params = []
+    if q or factor or a.get("params"):
+        for key, p in (s.sem or {}).get("rows", {}).items():
+            if p["kind"] not in ("input", "mixed"):
+                continue
+            if factor and p["factor"] != factor and p.get("sub") != factor:
+                continue
+            if q and q not in norm(p["name"]) and q not in norm(p["label"]):
+                continue
+            params.append({"ref": key, "name": p["name"], "factor": p["factor"], "sub": p.get("sub") or None, "unit": p["unit"],
+                           "scalar": p.get("scalar") or None, "values": p["values"], "influences": len(p["metrics"]), "fanout": p["fanout"]})
+        params.sort(key=lambda x: (-x["influences"], -x["fanout"]))
+    su = sm.summary(s.sem) if s.sem else {"factors": [], "subfactors": []}
+    payload = {"concepts": concepts, "missing": [cg.BY_ID[m]["name"] for m in cat["missing"] if m in cg.BY_ID],
+               "factors": su["factors"], "subfactors": su["subfactors"],
+               "parameters": params[:int(a.get("limit", 40) or 40)], "parameters_found": len(params),
+               "alt_sets": cat.get("alt_sets"), "switches": s.card.get("switches"), "warnings": cat.get("warnings"),
+               "how_found": cat.get("llm") or "лексикон + структура (без LLM)"}
+    emit("catalog", payload)
+    payload["note"] = ("Шок по показателю: {concept: id, op: pct, value}. shock=direct — показатель подменяется напрямую; "
+                       "drivers — меняются его допущения (с подгонкой). Метрики и ковенанты тоже можно задавать через concept. "
+                       "Параметры (parameters) показываются по query или factor. Если показатель найден неверно — catalog_set.")
+    return payload
+
+
+def t_find_parameters(s, a, emit):
+    """Реестр параметров модели: найти введённые числа (цены, курсы, коэффициенты, ставки…) по смыслу запроса."""
+    from ..workbook import params as pr
+    limit = int(a.get("limit", 20) or 20)
+    hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit)
+    out = [{"ref": h["ref"], "sheet": h["sheet"], "row": h["row"], "name": h["name"], "label": h["label"][:90], "block": h["block"][:90] or None,
+            "unit": h["unit"] or None, "factor": h["factor"], "sub": h["sub"], "scalar": h["scalar"] or None, "values": h["values"],
+            "influences": h["influences"] or None, "fanout": h["fanout"], "meaning": h["desc"] or None} for h in hits]
+    payload = {"query": a.get("query") or "", "found": total, "parameters": out, "overview": pr.overview(s)}
+    emit("params", payload)
+    res = {"found": total, "parameters": out,
+           "note": "Шок параметра: {sheet, row, op, value} в run_stress (scalar — параметр одной ячейкой, шок меняет её). "
+                   "influences — на какие ключевые показатели параметр влияет по формулам (пусто — до них не доходит). "
+                   "Несколько похожих строк (по сегментам, продуктам) — уточни у пользователя или шокируй все и скажи об этом."}
+    if not out:
+        res["overview"] = pr.overview(s)
+        res["note"] = ("По запросу ничего не найдено. Попробуй другие слова (в том числе по-английски, как в подписях модели), "
+                       "фильтр factor или sheet; overview показывает, какие листы и блоки параметров есть. "
+                       "Подписи без пояснений (коды, сокращения) находятся лучше после разбора модели LLM.")
+    elif not a.get("query"):
+        res["overview"] = pr.overview(s)
+    return res
+
+
+def t_catalog_set(s, a, emit):
+    """Закрепить показатель за строкой модели (исправить справочник или добавить свой показатель)."""
+    from ..workbook import catalog as cg
+    cid = norm(str(a["concept"])).replace(" ", "_")
+    known = next((c["id"] for c in cg.CONCEPTS if c["id"] == cid or norm(c["name"]) == norm(str(a["concept"]))), None)
+    cid = known or cid
+    e = cg.apply_pin(s.idx, s.catalog, cid, a["sheet"], int(a["row"]), s.forecast_start, a.get("name") or (None if known else str(a["concept"])))
+    cg.save(s.cache_dir, s.catalog)
+    s.refresh_card()
+    s.refresh_manifest()
+    return {"ok": True, "concept": e["id"], "name": e["name"], "where": f"{e['primary']['sheet']}!{e['primary']['row']}",
+            "computed_in": f"{e['origin']['sheet']}!{e['origin']['row']}", "shock": e["shock"],
+            "direct_shock_reaches": e.get("reaches"), "note": "Закрепление сохранено для этой модели и применится при следующих загрузках"}
 
 TOOLS = [
     {"name": "create_plan", "fn": t_create_plan,
@@ -727,6 +1028,46 @@ TOOLS = [
          "step": {"type": "integer"}, "status": {"type": "string", "enum": ["in_progress", "done", "skipped"]},
          "note": {"type": "string", "description": "Короткий итог шага"},
          "new_steps": {"type": "array", "items": {"type": "string"}}}, "required": ["step", "status"]}},
+    {"name": "get_model_manifest", "fn": t_get_model_manifest,
+     "description": "Единый паспорт загруженной модели и её готовность: найденные показатели, изменяемые параметры, "
+                    "зоны и связи, активные наборы сценариев, уверенность, доказательства и ограничения. Используй summary "
+                    "для знакомства с незнакомой моделью, остальные sections — для детализации по надобности.",
+     "parameters": {"type": "object", "properties": {
+         "section": {"type": "string", "enum": ["summary", "metrics", "parameters", "zones", "scenarios", "limitations", "full"]},
+         "query": {"type": "string", "description": "Фильтр по названию/подписи/блоку"},
+         "limit": {"type": "integer", "description": "До 200 записей; full тоже ограничивает параметры и связи"}}}},
+    {"name": "resolve_target", "fn": t_resolve_target,
+     "description": "Разрешить слова пользователя в показатель или изменяемый параметр Model Manifest перед чтением или шоком. "
+                    "Возвращает status resolved / ambiguous / not_found, кандидатов, уверенность и предупреждения. "
+                    "При ambiguous не выбирай строку молча: уточни или исследуй кандидатов.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "Показатель или параметр словами пользователя"},
+         "kind": {"type": "string", "enum": ["auto", "metric", "parameter"]},
+         "intent": {"type": "string", "enum": ["read", "shock"]},
+         "limit": {"type": "integer"}}, "required": ["query"]}},
+    {"name": "get_catalog", "fn": t_get_catalog,
+     "description": "Справочник модели: какие показатели (выручка, EBITDA, CAPEX, долг, DSCR…) где лежат, где считаются и как их шоковать "
+                    "(напрямую или через допущения), какие есть факторы и параметры-допущения (в т.ч. одиночные ячейки), наборы сценариев, "
+                    "ограничения. query — поиск по названию; factor — параметры одного фактора.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string"}, "group": {"type": "string", "enum": ["pnl", "cf", "bs", "ratio", "custom"]},
+         "factor": {"type": "string", "description": "Показать параметры-допущения этого фактора/подфактора"},
+         "params": {"type": "boolean", "description": "Показать все параметры-допущения"}, "limit": {"type": "integer"}}}},
+    {"name": "find_parameters", "fn": t_find_parameters,
+     "description": "Реестр параметров ЭТОЙ модели: все введённые числа, от которых что-то зависит (цены, курсы, коэффициенты, "
+                    "ставки, нормативы — на любом листе, рядом по годам или одной ячейкой). Ищет по смыслу запроса в названии, "
+                    "подписи, блоке, листе и факторе («цена бензина», «коэффициент загрузки», «ставка по кредиту»). "
+                    "ВСЕГДА вызывай перед шоком, если пользователь называет параметр словами. Без query — обзор реестра.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "Что ищем, словами пользователя"},
+         "factor": {"type": "string", "description": "Ограничить фактором или подфактором"},
+         "sheet": {"type": "string", "description": "Ограничить листом"}, "limit": {"type": "integer"}}}},
+    {"name": "catalog_set", "fn": t_catalog_set,
+     "description": "Закрепить показатель справочника за строкой модели: исправить неверно найденный (concept = id из справочника) "
+                    "или добавить свой («выручка сегмента А»). Строку сначала найди через search_rows. Закрепление сохраняется для модели.",
+     "parameters": {"type": "object", "properties": {
+         "concept": {"type": "string"}, "sheet": {"type": "string"}, "row": {"type": "integer"},
+         "name": {"type": "string", "description": "Название для своего показателя"}}, "required": ["concept", "sheet", "row"]}},
     {"name": "get_model_card", "fn": t_get_model_card,
      "description": "Карточка модели (экспресс-анализ): роли листов, годы, кандидаты ключевых метрик и драйверов, переключатели сценариев, потоки между листами.",
      "parameters": {"type": "object", "properties": {}}},
