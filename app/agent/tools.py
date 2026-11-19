@@ -135,6 +135,56 @@ def t_get_model_card(s, a, emit):
     return c
 
 
+def t_get_model_manifest(s, a, emit):
+    """Единый паспорт модели: готовность, показатели, параметры, зоны, связи и ограничения."""
+    from ..workbook import manifest as mf
+    manifest = s.refresh_manifest() or mf.build(s)
+    section = a.get("section") or "summary"
+    query = norm(a.get("query") or "")
+    limit = max(1, min(int(a.get("limit", 40) or 40), 200))
+    if section == "summary":
+        payload = mf.summary(manifest)
+    elif section == "metrics":
+        rows = manifest["metrics"]
+        if query:
+            rows = [x for x in rows if query in norm(x["name"]) or query in norm(x["catalog_id"])
+                    or query in norm(x["location"]["label"])]
+        payload = {"readiness": manifest["readiness"], "metrics": rows[:limit], "found": len(rows)}
+    elif section == "parameters":
+        rows = manifest["parameters"]
+        if query:
+            rows = [x for x in rows if any(query in norm(v) for v in
+                    (x["name"], x["location"]["label"], x["location"]["block"], x["factor"]["name"],
+                     x["location"]["ref"]))]
+        payload = {"readiness": manifest["readiness"], "parameters": rows[:limit], "found": len(rows)}
+    elif section == "zones":
+        payload = {"zones": manifest["zones"][:limit], "edges": manifest["edges"][:limit],
+                   "found": len(manifest["zones"]), "readiness": manifest["readiness"]}
+    elif section == "scenarios":
+        payload = {"scenario_sets": manifest["scenario_sets"], "switches": manifest["switches"],
+                   "readiness": manifest["readiness"]}
+    elif section == "limitations":
+        payload = {"limitations": manifest["limitations"], "readiness": manifest["readiness"]}
+    elif section == "full":
+        payload = dict(manifest)
+        payload["parameters"] = payload["parameters"][:limit]
+        payload["parameters_total"] = len(manifest["parameters"])
+        payload["edges"] = payload["edges"][:limit]
+    else:
+        raise ValueError("section: summary, metrics, parameters, zones, scenarios, limitations или full")
+    emit("manifest", payload)
+    return payload
+
+
+def t_resolve_target(s, a, emit):
+    """Слова пользователя → однозначная сущность manifest либо список кандидатов для уточнения."""
+    from ..workbook import manifest as mf
+    if getattr(s, "manifest", None) is None:
+        s.refresh_manifest()
+    return mf.resolve(s, a["query"], a.get("kind", "auto"), a.get("intent", "read"),
+                      int(a.get("limit", 8) or 8))
+
+
 def t_list_sheets(s, a, emit):
     out = []
     for sh in s.idx.sheets.values():
@@ -418,6 +468,7 @@ def _verify_direct(s, e, notes):
         notes.append(f"«{e['name']}»: подмена строки {e['origin']['sheet']}!{e['origin']['row']} не меняет итоговые показатели "
                      "(проверено пересчётом) — шок выполнен через допущения, из которых показатель считается")
     cg.save(s.cache_dir, s.catalog)
+    s.refresh_manifest()
     return "direct" if moved else "drivers"
 
 
@@ -959,6 +1010,7 @@ def t_catalog_set(s, a, emit):
     e = cg.apply_pin(s.idx, s.catalog, cid, a["sheet"], int(a["row"]), s.forecast_start, a.get("name") or (None if known else str(a["concept"])))
     cg.save(s.cache_dir, s.catalog)
     s.refresh_card()
+    s.refresh_manifest()
     return {"ok": True, "concept": e["id"], "name": e["name"], "where": f"{e['primary']['sheet']}!{e['primary']['row']}",
             "computed_in": f"{e['origin']['sheet']}!{e['origin']['row']}", "shock": e["shock"],
             "direct_shock_reaches": e.get("reaches"), "note": "Закрепление сохранено для этой модели и применится при следующих загрузках"}
@@ -976,6 +1028,23 @@ TOOLS = [
          "step": {"type": "integer"}, "status": {"type": "string", "enum": ["in_progress", "done", "skipped"]},
          "note": {"type": "string", "description": "Короткий итог шага"},
          "new_steps": {"type": "array", "items": {"type": "string"}}}, "required": ["step", "status"]}},
+    {"name": "get_model_manifest", "fn": t_get_model_manifest,
+     "description": "Единый паспорт загруженной модели и её готовность: найденные показатели, изменяемые параметры, "
+                    "зоны и связи, активные наборы сценариев, уверенность, доказательства и ограничения. Используй summary "
+                    "для знакомства с незнакомой моделью, остальные sections — для детализации по надобности.",
+     "parameters": {"type": "object", "properties": {
+         "section": {"type": "string", "enum": ["summary", "metrics", "parameters", "zones", "scenarios", "limitations", "full"]},
+         "query": {"type": "string", "description": "Фильтр по названию/подписи/блоку"},
+         "limit": {"type": "integer", "description": "До 200 записей; full тоже ограничивает параметры и связи"}}}},
+    {"name": "resolve_target", "fn": t_resolve_target,
+     "description": "Разрешить слова пользователя в показатель или изменяемый параметр Model Manifest перед чтением или шоком. "
+                    "Возвращает status resolved / ambiguous / not_found, кандидатов, уверенность и предупреждения. "
+                    "При ambiguous не выбирай строку молча: уточни или исследуй кандидатов.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "Показатель или параметр словами пользователя"},
+         "kind": {"type": "string", "enum": ["auto", "metric", "parameter"]},
+         "intent": {"type": "string", "enum": ["read", "shock"]},
+         "limit": {"type": "integer"}}, "required": ["query"]}},
     {"name": "get_catalog", "fn": t_get_catalog,
      "description": "Справочник модели: какие показатели (выручка, EBITDA, CAPEX, долг, DSCR…) где лежат, где считаются и как их шоковать "
                     "(напрямую или через допущения), какие есть факторы и параметры-допущения (в т.ч. одиночные ячейки), наборы сценариев, "

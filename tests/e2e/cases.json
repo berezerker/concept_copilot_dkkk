@@ -23,6 +23,7 @@
    "query": "Коротко опиши модель: отрасль, ключевые метрики и где лежат основные допущения",
    "expect_tools": [
     [
+     "get_model_manifest",
      "get_model_card",
      "list_sheets",
      "model_map",
@@ -62,6 +63,7 @@
    "query": "Покажи справочник модели: какие показатели ты нашёл, где они считаются и какие из них можно шоковать напрямую",
    "expect_tools": [
     [
+     "get_model_manifest",
      "get_catalog"
     ]
    ],
@@ -74,6 +76,7 @@
    "query": "Найди в модели ключевую ставку и курс рубля к доллару. Сделай стресс: ключевая ставка +3 п.п., курс +15%. Что будет с DSCR и Net Debt / EBITDA?",
    "expect_tools": [
     [
+     "resolve_target",
      "find_parameters"
     ],
     [

@@ -29,6 +29,7 @@ class Session:
         self.results = []          # результаты стресс-прогонов (для выгрузки)
         self.sem = None            # смысловой слой: паспорт строк и факторы (workbook/semantics.py)
         self.catalog = None        # справочник модели: показатели, где считаются, как шокируются (workbook/catalog.py)
+        self.manifest = None       # единый паспорт модели для агента, UI и preflight
         self.cache_dir = None
         self.client = None         # LLM текущего хода (для эксперта и заключения)
 
@@ -80,6 +81,7 @@ class Session:
             self.base_cache = {}
         elif cache_dir:
             cg.save(cache_dir, self.catalog)
+        self.refresh_manifest()
         return self.card
 
     def rebuild_catalog(self):
@@ -94,10 +96,20 @@ class Session:
         if self.cache_dir:
             cg.save(self.cache_dir, cat)
             sm.save(self.cache_dir, self.sem)
+        self.refresh_manifest()
 
     def refresh_card(self):
         self.card = build_card(self.idx, self.catalog)
         return self.card
+
+    def refresh_manifest(self):
+        """Пересобрать единый паспорт после изменения каталога или смыслового слоя."""
+        if self.idx is None or self.card is None or self.catalog is None or self.sem is None:
+            self.manifest = None
+            return None
+        from ..workbook.manifest import build
+        self.manifest = build(self)
+        return self.manifest
 
     def _engine_copy(self, src_path, dst):
         """Рабочая копия для движка по постоянному пути <workspace>/excel/<хэш файла>.xlsx.

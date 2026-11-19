@@ -79,8 +79,9 @@ def _load_into_session(path, filename, session_id=None, keep=False):
     finally:
         if not keep:
             os.unlink(path)
-    from .workbook import semantics as sm
+    from .workbook import semantics as sm, manifest as mf
     return {"session_id": s.id, "card": card, "seconds": round(time.time() - t0, 1), "semantics": sm.summary(s.sem),
+            "manifest": mf.summary(s.manifest),
             "engine": s.engine.name if s.engine_open else None, "engine_error": s.engine_error}
 
 
@@ -112,8 +113,9 @@ def upload_path(req: PathIn):
     except Exception as e:
         BUS.end(oid, False, str(e)[:200])
         raise HTTPException(400, f"Не удалось прочитать модель: {type(e).__name__}: {e}")
-    from .workbook import semantics as sm
+    from .workbook import semantics as sm, manifest as mf
     return {"session_id": s.id, "card": card, "seconds": round(time.time() - t0, 1), "semantics": sm.summary(s.sem),
+            "manifest": mf.summary(s.manifest),
             "engine": s.engine.name if s.engine_open else None, "engine_error": s.engine_error}
 
 
@@ -315,6 +317,10 @@ def _ensure_sem(s, client, emit, force=False):
         sm.save(s.cache_dir, s.sem)
         emit("semantics", sm.summary(s.sem))
         done = True
+    if done:
+        from .workbook import manifest as mf
+        s.refresh_manifest()
+        emit("manifest", mf.summary(s.manifest))
     return done
 
 
@@ -487,6 +493,14 @@ def _direct(session_id, name):
 def model_map(session_id: str):
     """Карта модели без LLM (кнопка в интерфейсе)."""
     return _direct(session_id, "model_map")
+
+
+@app.get("/api/manifest/{session_id}")
+def model_manifest(session_id: str):
+    """Единый паспорт модели для UI и внешних интеграций."""
+    from .workbook import manifest as mf
+    s = _session(session_id)
+    return s.refresh_manifest() or mf.build(s)
 
 
 @app.get("/api/audit/{session_id}")

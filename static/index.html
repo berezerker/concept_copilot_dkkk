@@ -341,6 +341,7 @@ async function runSemantics(force){
         if(!data) continue; const d=JSON.parse(data);
         if(ev==='progress' && $('#semStatus')) $('#semStatus').textContent=d.text;
         if(ev==='semantics') renderSem(d, d.offline?'offline':'done');
+        if(ev==='manifest') renderManifestStatus(d);
         if(ev==='card' && $('#kmBox')) $('#kmBox').innerHTML=kmHtml(d);
         if(ev==='error' && $('#semStatus')) $('#semStatus').innerHTML=`<span class="bad">${esc(d.text)}</span>`;
       } }
@@ -372,6 +373,17 @@ async function openFactor(fid){
 function kmHtml(c){
   return c.key_metrics.map(m=>`<div class="metric"><b>${esc(m.metric)}</b> → ${m.candidates.slice(0,1).map(x=>`<span class="mono">${esc(x.sheet)}!${x.row}</span>${x.static?' <span style="color:#b3261e">не зависит от допущений</span>':''}`).join(', ')}</div>`).join('');
 }
+function manifestStatusHtml(m){
+  if(!m||!m.readiness) return '<div class="kv">паспорт ещё не построен</div>';
+  const r=m.readiness, c=r.coverage||{}, labels={ready:'готова',ready_with_warnings:'готова с оговорками',read_only:'только чтение',blocked:'нужна настройка'};
+  const cls=r.status==='ready'?'ok':r.status==='blocked'?'bad':'';
+  return `<div class="kv"><b class="${cls}">${labels[r.status]||esc(r.status)}</b><br>
+    ${c.catalog_metrics??0} из ${c.catalog_total??0} типовых показателей · ${c.parameters??0} параметров · ${c.parameters_with_known_impact??0} с известным влиянием<br>
+    <span style="color:var(--muted)">анализ: ${r.capabilities?.analyze?'да':'нет'} · стресс: ${r.capabilities?.stress?'да':'нет'} · смысловой слой: ${esc(r.semantic_layer||'—')}</span></div>
+    ${(r.blockers||[]).map(x=>`<div class="metric bad">⛔ ${esc(x)}</div>`).join('')}
+    ${(r.warnings||[]).map(x=>`<div class="metric" style="color:#9a5a00">⚠ ${esc(x)}</div>`).join('')}`;
+}
+function renderManifestStatus(m){ const box=$('#manifestBox'); if(box) box.innerHTML=manifestStatusHtml(m); }
 function renderParams(d, body){
   const P=d.parameters||[], o=d.overview||{};
   const row=p=>`<tr data-s="${esc((p.name+' '+p.label+' '+(p.block||'')+' '+p.sheet+' '+p.factor+' '+(p.sub||'')).toLowerCase())}"><td><b>${esc(p.name)}</b>${p.label&&p.label!==p.name?'<br><span style="color:var(--muted);font-size:12px">'+esc(p.label)+'</span>':''}</td><td class="mono">${esc(p.ref)}${p.scalar?'<br><span style="color:var(--muted)">одна ячейка</span>':''}</td><td style="font-size:12px">${esc(p.block||'')}</td><td>${esc(p.factor)}${p.sub?' / '+esc(p.sub):''}</td><td style="font-size:12px">${esc(Object.entries(p.values||{}).slice(0,3).map(([k,v])=>k+': '+v).join(' · '))} ${esc(p.unit||'')}</td><td style="font-size:12px">${p.influences?esc(p.influences.slice(0,4).join(', '))+(p.influences.length>4?'…':''):'<span style="color:#9a5a00">не доходит до ключевых показателей</span>'}</td></tr>`;
@@ -405,6 +417,7 @@ function renderCard(d){
   const flows = c.sheet_flows.slice(0,8).map(f=>`<div class="metric">${esc(f.from)} → ${esc(f.to)} <span style="color:var(--muted)">(${f.refs})</span></div>`).join('');
   $('#card').innerHTML = `
     <div class="sec"><h3>Карточка модели</h3><div class="kv"><b>${esc(c.file)}</b><br>${c.sheets_total} листов · ${c.formulas_total.toLocaleString('ru-RU')} формул<br>${esc(c.template)}<br>итеративный расчёт: ${c.iterative_calc?'да (циклические ссылки)':'нет'}<br>прогноз по умолчанию с <b>${c.forecast_start??'—'}</b></div></div>
+    <div class="sec"><h3>Готовность паспорта модели</h3><div id="manifestBox">${manifestStatusHtml(d.manifest)}</div></div>
     ${d.engine?'':`<div class="sec warn">Пересчёт недоступен: ${esc(d.engine_error||'')}. Работают поиск и чтение, стресс-тесты — нет.</div>`}
     <div class="sec"><h3>Смысл модели: экономические факторы</h3><div id="semBox"></div></div>
     <div class="sec"><h3>Листы по ролям</h3><div class="sheetlist">${sheets}</div></div>
@@ -516,6 +529,7 @@ function handle(ev, d, ctx){
   else if(ev==='semmap'){ renderSemMap(d, body); }
   else if(ev==='deps'){ renderDeps(d, body); }
   else if(ev==='semantics'){ renderSem(d,'done'); }
+  else if(ev==='manifest'){ renderManifestStatus(d); }
   else if(ev==='card'){ if($('#kmBox')) $('#kmBox').innerHTML=kmHtml(d); }
   else if(ev==='catalog'){ renderCatalog(d, body); }
   else if(ev==='params'){ renderParams(d, body); }
