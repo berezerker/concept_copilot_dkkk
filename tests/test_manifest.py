@@ -48,6 +48,34 @@ def test_manifest():
         assert resolved["status"] == "resolved" and resolved["selected"]["id"] == "metric:ebitda"
         param = call(s, "resolve_target", {"query": "ставка налога на прибыль", "kind": "parameter", "intent": "shock"})
         assert param["status"] == "resolved" and param["selected"]["location"]["ref"] == "Параметры!3"
+        by_id = call(s, "resolve_target", {"query": param["selected"]["id"], "kind": "parameter"})
+        assert by_id["selected"]["id"] == param["selected"]["id"]
+        # Ограничение выдачи не должно скрывать неоднозначность одинаковых подписей.
+        original = s.manifest
+        import copy
+        s.manifest = copy.deepcopy(original)
+        s.manifest["metrics"][0]["name"] = "Совпадающий показатель"
+        duplicate = copy.deepcopy(s.manifest["metrics"][0])
+        duplicate.update(id="metric:duplicate", catalog_id="duplicate")
+        s.manifest["metrics"].append(duplicate)
+        ambiguous = mf.resolve(s, duplicate["name"], kind="metric", limit=1)
+        assert ambiguous["status"] == "ambiguous" and ambiguous["selected"] is None
+        s.manifest = original
+        from app.agent.tools import _build_overrides
+        overrides, _, _, _ = _build_overrides(s, [{"target": param["selected"]["id"], "op": "pct", "value": 10}])
+        assert overrides and "Параметры" in overrides[0]["ref"]
+        # В смешанной строке параметра формула не должна попадать в запись шока.
+        from unittest.mock import patch
+        from app.agent.tools import _shock_cols
+        sh, ri, cols = _shock_cols(s, "База", 2, None)
+        formula_col = sorted(cols)[1]
+        with patch.dict(ri.formulas, {formula_col: "=D2*1.03"}):
+            mixed, _, _, _ = _build_overrides(s, [{"sheet": "База", "row": 2, "_inputs_only": True,
+                                                  "op": "pct", "value": -10}])
+        from openpyxl.utils.cell import range_boundaries
+        for item in mixed:
+            c1, _, c2, _ = range_boundaries(item["ref"].rsplit("!", 1)[1])
+            assert not c1 <= formula_col <= c2, "формула смешанной строки не должна заменяться значением"
         missing = call(s, "resolve_target", {"query": "стоимость космического корабля", "kind": "parameter"})
         assert missing["status"] == "not_found" and not missing["candidates"]
 

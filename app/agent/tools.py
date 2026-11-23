@@ -117,7 +117,12 @@ def t_update_plan(s, a, emit):
     if not 0 <= i < len(s.plan["steps"]):
         raise ValueError(f"Шаг должен быть от 1 до {len(s.plan['steps'])}")
     st = s.plan["steps"][i]
-    st["status"] = a.get("status", "done")
+    status = a.get("status", "done")
+    if status not in ("in_progress", "done", "skipped"):
+        raise ValueError("status: in_progress, done или skipped")
+    if status == "skipped" and not a.get("note"):
+        raise ValueError("Для пропущенного шага нужна причина в note")
+    st["status"] = status
     st["note"] = a.get("note", "")[:300]
     if a.get("new_steps"):
         for t in a["new_steps"][:5]:
@@ -506,7 +511,7 @@ def _concept_shock(s, sh_, notes):
     if not rows:
         raise ValueError(f"У показателя «{e['name']}» ({o['sheet']}!{o['row']}) нет допущений выше по расчёту: шокируй его напрямую (mode=direct)")
     rows = sorted(rows, key=lambda u: -u["fanout"])[:200]
-    mk = lambda v: [dict({k: x for k, x in keep.items() if k != "value"}, value=v, sheet=u["sheet"], row=u["row"], _quiet=True) for u in rows]  # noqa: E731
+    mk = lambda v: [dict({k: x for k, x in keep.items() if k != "value"}, value=v, sheet=u["sheet"], row=u["row"], _quiet=True, _inputs_only=True) for u in rows]  # noqa: E731
     pct = value
     if sh_.get("calibrate", True) and s.engine_open and e["kind"] != "ratio" and value:
         # подгонка: на сколько изменить допущения, чтобы сам показатель изменился на заданный процент
@@ -536,8 +541,30 @@ def _concept_shock(s, sh_, notes):
 
 def _expand_shocks(s, shocks, notes):
     """concept / factor / match → набор строк; остальные шоки — как есть."""
+    import math
+    from ..workbook import manifest as mf
+    prepared = []
+    # Проверяем все именованные цели до пробных пересчётов concept/drivers.
+    for source in shocks:
+        sh_ = dict(source)
+        if sh_.get("op", "pct") not in ("pct", "add", "mul", "set", "shift") or not math.isfinite(float(sh_.get("value", 0))):
+            raise ValueError("Шок должен иметь допустимую операцию и конечное числовое значение")
+        if sh_.get("target"):
+            if any(sh_.get(k) is not None for k in ("sheet", "row", "cell", "range", "concept", "factor", "sub", "match")):
+                raise ValueError("target нельзя смешивать с другими способами выбора цели")
+            resolved = mf.resolve(s, sh_.pop("target"), intent="shock")
+            if resolved["status"] != "resolved":
+                raise ValueError("Цель шока " + resolved["status"] + ": " + "; ".join(
+                    f"{c['id']} ({c['name']})" for c in resolved["candidates"]))
+            selected = resolved["selected"]
+            if selected["kind"] == "metric":
+                sh_["concept"] = selected["catalog_id"]
+            else:
+                sh_.update(sheet=selected["location"]["sheet"], row=selected["location"]["row"], _inputs_only=True)
+            notes.extend(resolved["warnings"])
+        prepared.append(sh_)
     out = []
-    for sh_ in shocks:
+    for sh_ in prepared:
         if sh_.get("concept") and not sh_.get("row"):
             out += _concept_shock(s, sh_, notes)
         elif sh_.get("factor") or sh_.get("sub"):                     # экономический фактор из смыслового слоя
@@ -553,7 +580,7 @@ def _expand_shocks(s, shocks, notes):
                 notes.append(f"Фактор «{what}»: {len(rows)} строк, шок применён к {lim} самым влиятельным")
             for p in rows[:lim]:
                 d = {k: v for k, v in sh_.items() if k not in ("factor", "sub", "max_rows", "include_formulas", "match")}
-                d.update(sheet=p["sheet"], row=p["row"], _quiet=True)
+                d.update(sheet=p["sheet"], row=p["row"], _quiet=True, _inputs_only=True)
                 out.append(d)
         elif sh_.get("match"):
             rows, total = _match_rows(s, sh_["match"], sh_.get("sheet"), bool(sh_.get("include_formulas")),
@@ -629,6 +656,12 @@ def _build_overrides(s, shocks, metric_nodes=None):
         sheet, row = sh_["sheet"], int(sh_["row"])
         try:
             sh, ri, cols = _shock_cols(s, sheet, row, sh_.get("years"))
+            if sh_.get("_inputs_only"):
+                # Факторы и параметры меняют только введённые числа. Формулы в
+                # смешанной строке должны продолжать рассчитываться из этих чисел.
+                cols = {c: y for c, y in cols.items() if c not in ri.formulas}
+                if not cols:
+                    raise ValueError(f"{sh.name}!{row}: в выбранном периоде нет введённых чисел")
         except ValueError as e:
             if not sh_.get("_quiet"):
                 raise
@@ -884,6 +917,7 @@ def t_goal_seek(s, a, emit):
 SHOCK_SCHEMA = {
     "type": "object",
     "properties": {
+        "target": {"type": "string", "description": "id сущности из resolve_target (metric:… / parameter:…) или однозначное название. Неоднозначная цель блокирует шок до записи."},
         "sheet": {"type": "string", "description": "Лист строки-драйвера"},
         "row": {"type": "integer", "description": "Номер строки-драйвера (ряд по годам)"},
         "cell": {"type": "string", "description": "Вместо row: адрес одной ячейки (например E87) — для одиночных параметров, стресс-надстроек и переключателей сценариев"},

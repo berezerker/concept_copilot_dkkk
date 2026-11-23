@@ -76,8 +76,11 @@ def make_foreign_session():
     from app.agent.session import Session
     d = tempfile.mkdtemp()
     p = make_foreign(os.path.join(d, "foreign.xlsx"))
+    if os.environ.get("CF_ENGINE") == "excel":
+        from tests.excel_fixture import calculate_fixture
+        calculate_fixture(p)
     so = shutil.which("soffice") or shutil.which("libreoffice")
-    if so:                                           # посчитать формулы, чтобы в файле появились значения
+    if so and os.environ.get("CF_ENGINE") != "excel":  # Excel-режим не запускает soffice
         subprocess.run([so, "--headless", "--convert-to", "xlsx", "--outdir", os.path.join(d, "calc"), p],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
         p2 = os.path.join(d, "calc", "foreign.xlsx")

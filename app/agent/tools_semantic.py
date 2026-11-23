@@ -116,7 +116,7 @@ def scan(s, metrics, hows, shock=10.0, level="factor", years=None, emit=None, co
         rows = groups[k][:max_rows]
         if emit:
             emit("progress", {"text": f"Пересчёт {i + 1}/{len(runs)}: {_gname(s, k)} ({len(rows)} строк) −{shock:g}%"})
-        shocks = [{"sheet": x["sheet"], "row": x["row"], "op": "pct", "value": -shock, "_quiet": True} for x in rows]
+        shocks = [{"sheet": x["sheet"], "row": x["row"], "op": "pct", "value": -shock, "_quiet": True, "_inputs_only": True} for x in rows]
         try:
             ov, _, _, _ = _build_overrides(s, shocks)
             vals, _ = s.engine.scenario(ov, watch, watch + creads)

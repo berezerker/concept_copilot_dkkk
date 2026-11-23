@@ -10,6 +10,9 @@ SCRIPT = [("create_plan", {"goal": "тест", "steps": ["найти драйв�
           ("search_rows", {"query": "цена", "limit": 3}),
           ("run_stress", {"scenarios": [{"name": "Цена -10%", "shocks": [{"sheet": "Inputs", "row": 3, "op": "pct", "value": -10}]}],
                           "metrics": [{"sheet": "Calc", "row": 8, "name": "DSCR"}]}),
+          ("update_plan", {"step": 1, "status": "done"}),
+          ("update_plan", {"step": 2, "status": "done"}),
+          ("update_plan", {"step": 3, "status": "done"}),
           (None, "Готово: DSCR снижается.")]
 
 
@@ -75,7 +78,7 @@ def _run(client):
     run_turn(s, client, "Стресс цены -10%, что с DSCR?", lambda k, d: events.append((k, d)))
     kinds = [k for k, _ in events]
     assert "error" not in kinds, events
-    assert kinds.count("tool_end") == 3
+    assert kinds.count("tool_end") == 6
     assert all(d["ok"] for k, d in events if k == "tool_end"), events
     assert events[-1][0] == "answer"
     chart = next(d for k, d in events if k == "chart")
@@ -91,7 +94,7 @@ def test_openai():
     seen = []
     c.http = httpx.Client(transport=httpx.MockTransport(openai_handler(seen)))
     _run(c)
-    assert len(seen) == 4
+    assert len(seen) == 7
 
 
 def test_gigachat():

@@ -115,6 +115,9 @@ def _readiness(s, metrics: list[dict], parameters: list[dict], limitations: list
         blockers.append("Не найдено ни одного ключевого показателя")
     if not parameters:
         blockers.append("Не найдено изменяемых параметров, влияющих на расчёт")
+    tainted = bool(getattr(s.engine, "_tainted", False))
+    if tainted:
+        blockers.append("Восстановление Excel не подтверждено; загрузите модель заново")
     warnings = []
     if low:
         warnings.append(f"{len(low)} показателей требуют проверки")
@@ -135,7 +138,7 @@ def _readiness(s, metrics: list[dict], parameters: list[dict], limitations: list
     return {
         "status": status,
         "capabilities": {"analyze": bool(metrics),
-                         "stress": bool(s.engine_open and metrics and parameters),
+                         "stress": bool(s.engine_open and metrics and parameters and not tainted),
                          "free_agent": bool(metrics and parameters)},
         "coverage": {"catalog_metrics": len(metrics), "catalog_total": len(cg.CONCEPTS),
                      "parameters": len(parameters),
@@ -240,36 +243,44 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
     """Разрешить слова пользователя в сущность manifest без угадывания при неоднозначности."""
     manifest = getattr(s, "manifest", None) or build(s)
     query = str(query or "").strip()
+    if kind not in ("auto", "metric", "parameter") or intent not in ("read", "shock"):
+        raise ValueError("Некорректный kind или intent")
+    limit = max(1, min(int(limit), 200))
     if not query:
         raise ValueError("Нужно указать query — показатель или параметр словами пользователя")
     candidates = []
     if kind in ("auto", "metric"):
-        for score, m in _metric_candidates(manifest, query)[:limit]:
+        for score, m in _metric_candidates(manifest, query):
             candidates.append({"score": round(score, 2), **m})
     if kind in ("auto", "parameter"):
-        hits, _ = pr.search(s, query, limit=limit)
+        hits, _ = pr.search(s, query, limit=max(2, len(manifest["parameters"])))
         by_ref = {p["location"]["ref"]: p for p in manifest["parameters"]}
         for hit in hits:
             p = by_ref.get(hit["ref"])
             if p:
                 candidates.append({"score": round(float(hit.get("score", 0)), 2), **p})
+        for p in manifest["parameters"]:
+            if query == p["id"] or query.casefold() == p["location"]["ref"].casefold():
+                candidates = [c for c in candidates if c["id"] != p["id"]]
+                candidates.append({"score": 100.0, **p})
     # Точный id или адрес всегда сильнее смыслового поиска.
     qnorm = _norm(query)
-    exact = [x for x in candidates if query == x.get("id") or
-             query.lower() == str((x.get("location") or {}).get("ref", "")).lower() or
-             qnorm == _norm(x.get("name") or "") or
+    identity = [x for x in candidates if query == x.get("id") or
+                query.casefold() == str(x.get("catalog_id", "")).casefold() or
+                query.casefold() == str((x.get("location") or {}).get("ref", "")).casefold()]
+    exact = identity or [x for x in candidates if qnorm == _norm(x.get("name") or "") or
              qnorm == _norm((x.get("location") or {}).get("label") or "")]
     candidates.sort(key=lambda x: -x["score"])
     selected = exact[0] if exact else (candidates[0] if candidates else None)
     if exact:
-        status = "resolved"
+        status = "resolved" if len(exact) == 1 else "ambiguous"
     elif not candidates:
         status = "not_found"
     elif len(candidates) == 1:
         status = "resolved"
     else:
         gap = candidates[0]["score"] - candidates[1]["score"]
-        status = "resolved" if candidates[0]["score"] >= 15 or gap >= 2.0 else "ambiguous"
+        status = "resolved" if gap >= 2.0 else "ambiguous"
     warnings = []
     if selected and intent == "shock":
         if selected["kind"] == "metric" and selected.get("metric_kind") == "ratio":
@@ -285,7 +296,7 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
         "query": query, "kind": kind, "intent": intent, "status": status,
         "selected": selected if status == "resolved" else None,
         "candidates": candidates[:limit], "warnings": warnings,
-        "next_action": "build_scenario" if status == "resolved" and not warnings else
+        "next_action": ("build_scenario" if intent == "shock" else "read_target") if status == "resolved" and not warnings else
                        ("inspect_and_confirm" if candidates else "search_model"),
         "note": "resolved означает однозначное сопоставление, но не заменяет preflight и проверку пересчётом",
     }

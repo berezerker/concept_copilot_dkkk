@@ -22,4 +22,9 @@ TOOL_MAP = {t["name"]: t for t in ALL_TOOLS}
 
 
 def tool_specs():
-    return [{"name": t["name"], "description": t["description"], "parameters": t["parameters"]} for t in ALL_TOOLS]
+    import copy
+    specs = [{"name": t["name"], "description": t["description"], "parameters": copy.deepcopy(t["parameters"])} for t in ALL_TOOLS]
+    for spec in specs:
+        spec["parameters"].setdefault("properties", {})["retry_of"] = {
+            "type": "string", "description": "id ошибочного вызова этого же инструмента, который исправляет данный повтор с новыми аргументами"}
+    return specs

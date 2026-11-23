@@ -90,6 +90,7 @@ class EngineProxy:
         self._sid = sid
         self.name = engine.name
         self.n_scen = 0
+        self.transactions = []
 
     def __getattr__(self, k):
         return getattr(self._e, k)
@@ -108,7 +109,15 @@ class EngineProxy:
         self.n_scen += 1
         cells = sum(len(o["values"]) * (len(o["values"][0]) if o["values"] else 0) for o in overrides)
         t0 = time.time()
-        res, iters = self._e.scenario(overrides, watch, reads)
+        try:
+            res, iters = self._e.scenario(overrides, watch, reads)
+        finally:
+            receipt = dict(getattr(self._e, "last_transaction", {}) or {})
+            receipt.update(sequence=self.n_scen, engine=self.name)
+            self.transactions.append(receipt)
+            self.transactions = self.transactions[-100:]
+            if receipt.get("status") == "restore_failed":
+                BUS.log("Восстановление книги не подтверждено; дальнейшие расчёты заблокированы", "engine", "error", self._sid)
         dt = time.time() - t0
         tm = getattr(self._e, "last_timing", None)
         ct = getattr(self._e, "calc_times", None)

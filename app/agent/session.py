@@ -34,6 +34,8 @@ class Session:
         self.client = None         # LLM текущего хода (для эксперта и заключения)
 
     def load(self, src_path: str, filename: str, cache_dir: str, engine_kind: str | None, progress=None):
+        self.engine_open = False
+        self.engine_error = None
         dst = os.path.join(self.workdir, os.path.basename(filename))
         shutil.copyfile(src_path, dst)                       # работаем только с копией
         self.idx = build_index(dst, cache_dir=cache_dir, progress=progress)
@@ -130,6 +132,9 @@ class Session:
                 pass
 
     def require_engine(self):
+        if getattr(self.engine, "_tainted", False):
+            from ..workbook.transaction import RestorationError
+            raise RestorationError("Восстановление Excel не подтверждено. Загрузите модель заново.")
         if not self.engine_open:
             raise EngineUnavailable(
                 "Пересчёт недоступен: " + (self.engine_error or "движок не запущен") +

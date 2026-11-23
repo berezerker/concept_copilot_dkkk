@@ -27,11 +27,18 @@ feature/…       ●──●            ●─●             одна зад�
 1. `git switch develop && git pull`
 2. `git switch -c feature/имя`
 3. Небольшие коммиты, сообщение в повелительном наклонении: «Добавить пакетное чтение строк в Excel-движок».
-4. Перед PR — быстрые тесты (одна минута, без Excel и сети):
+4. Перед PR — проверки без Excel и сети:
    ```
+   python tests/test_excel_engine.py && python tests/test_transactions.py \
+     && python tests/test_harness.py && python tests/test_grading.py
+   ```
+   Интеграционные тесты с установленным Microsoft Excel (без запросов к LLM):
+   ```
+   export CF_ENGINE=excel
    python tests/test_tools.py && python tests/test_credit.py && python tests/test_connectors.py \
-     && python tests/test_excel_engine.py && python tests/test_grading.py && python tests/test_manifest.py
+     && python tests/test_catalog.py && python tests/test_manifest.py
    ```
+   В Excel-режиме подготовка кэша формул синтетических книг также выполняется Excel, без `soffice`.
 5. PR в `develop`, описание: что поменялось и как проверено. Слияние — squash, ветку удалить.
 
 ## Релиз

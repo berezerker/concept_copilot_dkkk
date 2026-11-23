@@ -37,6 +37,9 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
     turn = [{"role": "user", "content": user_text}]
     system = {"role": "system", "content": system_prompt(session)}
     force_plan = plan_mode
+    failures = {}
+    completion_retry = False
+    session.evidence = []
     specs = tool_specs()
     if not plan_mode:
         specs = [t for t in specs if t["name"] not in ("create_plan", "update_plan")]
@@ -60,12 +63,26 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
 
         if not resp.tool_calls:
             answer = resp.content.strip() or "Модель вернула пустой ответ."
+            pending = [i + 1 for i, st in enumerate((session.plan or {}).get("steps", []))
+                       if st["status"] not in ("done", "skipped")]
+            if (pending or failures or (plan_mode and not session.plan)) and not completion_retry:
+                completion_retry = True
+                turn.append({"role": "assistant", "content": answer})
+                turn.append({"role": "user", "content":
+                    "Проверка выполнения: незавершённые шаги " + str(pending) +
+                    "; ошибки инструментов: " + json.dumps(failures, ensure_ascii=False) +
+                    ". Исправь ошибки и повтори нужные инструменты. Обнови план только по фактическим результатам; "
+                    "невыполнимые шаги пропусти с причиной. Не объявляй расчёт успешным без подтверждения."})
+                continue
+            complete = not failures and not pending and (not plan_mode or bool(session.plan))
+            if failures:
+                answer = "Задача не завершена: остались ошибки инструментов.\n\n" + "\n".join(
+                    f"- {failure['tool']}: {failure['error']}" for failure in failures.values())
+            elif not complete:
+                answer = "Задача выполнена частично: завершение всех шагов не подтверждено.\n\n" + answer
             if session.plan:
-                for st in session.plan["steps"]:
-                    if st["status"] in ("pending", "in_progress"):
-                        st["status"] = "done"
                 emit("plan", session.plan)
-            emit("answer", {"text": answer, "seconds": round(time.time() - t0, 1)})
+            emit("answer", {"text": answer, "complete": complete, "seconds": round(time.time() - t0, 1)})
             session.history += [{"role": "user", "content": user_text},
                                 {"role": "assistant", "content": answer}]
             session.history = session.history[-12:]          # прошлые ходы — без служебного трафика
@@ -84,14 +101,31 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
             t1 = time.time()
             tool = TOOL_MAP.get(c.name)
             ok = True
+            key = json.dumps(c.arguments, sort_keys=True, ensure_ascii=False)
+            retry_of = None
             try:
                 if tool is None:
                     raise ValueError(f"Нет инструмента {c.name}")
-                if "_raw" in c.arguments:
-                    raise ValueError("Аргументы не в формате JSON")
+                if not isinstance(c.arguments, dict) or "_raw" in c.arguments:
+                    raise ValueError("Аргументы должны быть JSON-объектом")
+                args = {k: v for k, v in c.arguments.items() if k != "retry_of"}
+                key = json.dumps(args, sort_keys=True, ensure_ascii=False)
+                retry_of = c.arguments.get("retry_of")
+                if retry_of and (retry_of not in failures or failures[retry_of]["tool"] != c.name):
+                    raise ValueError("retry_of должен ссылаться на ошибочный вызов этого же инструмента")
                 from ..logbus import wait_lock
                 with wait_lock(session.lock, emit, session.id):
-                    result = tool["fn"](session, c.arguments, emit)
+                    engine = getattr(session, "engine", None)
+                    seq = getattr(engine, "n_scen", 0)
+                    result = tool["fn"](session, args, emit)
+                    if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
+                        ok = False
+                    receipts = [r for r in getattr(engine, "transactions", []) if r["sequence"] > seq]
+                    if receipts and isinstance(result, dict):
+                        result = dict(result, execution={"scenarios": getattr(engine, "n_scen", 0) - seq,
+                                                       "recent_transactions": receipts[-5:]})
+                    if getattr(engine, "_tainted", False):
+                        raise RuntimeError("Excel не восстановлен; результат инструмента нельзя использовать")
             except Exception as e:
                 from ..logbus import Cancelled
                 if isinstance(e, Cancelled):
@@ -100,10 +134,24 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                 result = {"error": f"{type(e).__name__}: {e}"}
                 if not isinstance(e, (ValueError, KeyError)):
                     result["trace"] = traceback.format_exc(limit=2)[-600:]
+                if getattr(getattr(session, "engine", None), "_tainted", False):
+                    from ..workbook import manifest as mf
+                    session.refresh_manifest()
+                    emit("manifest", mf.summary(session.manifest))
+            if ok:
+                failures = {fid: f for fid, f in failures.items() if not (
+                    f["tool"] == c.name and (f["args"] == key or fid == retry_of))}
+            else:
+                failures[c.id] = {"tool": c.name, "args": key,
+                                  "error": str(result.get("error") or "Инструмент не подтвердил выполнение")}
+                result = dict(result, failed_call_id=c.id,
+                              recovery="Повтори тот же вызов или передай retry_of с этим id при исправлении аргументов")
+            session.evidence.append({"id": c.id, "tool": c.name, "ok": ok})
             ui_result = result if len(json.dumps(result, ensure_ascii=False, default=str)) <= 20000 else _short(result, 20000)
             emit("tool_end", {"id": c.id, "name": c.name, "ok": ok, "seconds": round(time.time() - t1, 1),
                               "result": ui_result})
             turn.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
                          "content": _short(result, client.max_tool_chars)})
 
-    emit("answer", {"text": "Достигнут лимит шагов агента. Сузьте задачу или разбейте её на части."})
+    emit("answer", {"text": "Достигнут лимит шагов агента. Задача не завершена; оставшиеся шаги не отмечены выполненными.",
+                    "complete": False})
