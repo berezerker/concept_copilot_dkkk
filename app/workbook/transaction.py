@@ -9,6 +9,13 @@ class RestorationError(RuntimeError):
     """Состояние книги не подтверждено; повтор операции запрещён до переоткрытия."""
 
 
+def split_ref(ref):
+    sheet, addr = ref.rsplit("!", 1)
+    if sheet.startswith("'") and sheet.endswith("'"):
+        sheet = sheet[1:-1].replace("''", "'")
+    return sheet, addr.replace("$", "")
+
+
 def validate_overrides(overrides):
     seen = []
     cells = 0
@@ -16,9 +23,8 @@ def validate_overrides(overrides):
         ref = item.get("ref", "")
         if "!" not in ref:
             raise ValueError(f"Нужен точный адрес лист!диапазон: {ref}")
-        sheet, addr = ref.rsplit("!", 1)
-        sheet = sheet.strip("'").replace("''", "'")
-        addr = addr.replace("$", "").upper()
+        sheet, addr = split_ref(ref)
+        addr = addr.upper()
         if not sheet or not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*(?::[A-Z]{1,3}[1-9][0-9]*)?", addr):
             raise ValueError(f"Неверный адрес: {ref}")
         c1, r1, c2, r2 = range_boundaries(addr)

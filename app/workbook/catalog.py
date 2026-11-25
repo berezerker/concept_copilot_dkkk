@@ -117,6 +117,15 @@ def _describe(idx, sheet, row):
     return {"sheet": sheet, "row": row, "label": (ri.label if ri else "")[:120], "unit": ri.unit if ri else ""}
 
 
+def display_unit(kind, raw_unit):
+    """Денежная/физическая подпись строки не может быть единицей коэффициента."""
+    if kind != "ratio":
+        return raw_unit
+    if raw_unit.strip().casefold() in {"%", "x", "х", "×", "раз", "раза", "крат"}:
+        return raw_unit
+    return ""
+
+
 def _finalize(idx, concept, cands, fs, layers, how, upcache):
     """Из кандидатов — запись справочника: основная строка, происхождение, способ шока, уверенность."""
     max_layer = max(layers.values()) if layers else 0

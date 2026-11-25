@@ -30,7 +30,8 @@ feature/…       ●──●            ●─●             одна зад�
 4. Перед PR — проверки без Excel и сети:
    ```
    python tests/test_excel_engine.py && python tests/test_transactions.py \
-     && python tests/test_harness.py && python tests/test_grading.py
+     && python tests/test_harness.py && python tests/test_grading.py \
+     && python tests/test_index_limitations.py && python tests/test_cell_trace.py
    ```
    Интеграционные тесты с установленным Microsoft Excel (без запросов к LLM):
    ```
@@ -39,6 +40,10 @@ feature/…       ●──●            ●─●             одна зад�
      && python tests/test_catalog.py && python tests/test_manifest.py
    ```
    В Excel-режиме подготовка кэша формул синтетических книг также выполняется Excel, без `soffice`.
+   Для приёмки конкретного драйвера на большой обезличенной модели выполните
+   `python -m tests.e2e.verify_cell_stress --model путь.xlsx --metric dscr --period 2026 --driver-query цена --driver-period 2026`.
+   Выберите поисковую подпись и период, присутствующие в книге. Проверка подтверждает привязку в отдельном кэше,
+   находит цепочку, сравнивает эффект −10% и сверяет базу после отката. Она выполняется локально через Excel.
 5. PR в `develop`, описание: что поменялось и как проверено. Слияние — squash, ветку удалить.
 
 ## Релиз

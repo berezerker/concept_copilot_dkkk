@@ -54,6 +54,13 @@ class Transactions(unittest.TestCase):
             self.assertEqual(CALLS["writes"], before)
             self.assert_base()
 
+    def test_checked_input_that_has_changed_is_not_written(self):
+        before = CALLS["writes"]
+        with self.assertRaisesRegex(ValueError, "допущение изменилось"):
+            self.run_scenario([{"ref": "Inputs!C3", "values": [[89.]], "expected_input": [[99.]]}])
+        self.assertEqual(CALLS["writes"], before)
+        self.assert_base()
+
     def test_partial_batch_write_rolls_back(self):
         def batch(name, ops):
             sh, addr, kind, values = ops[0]
@@ -87,7 +94,7 @@ class Transactions(unittest.TestCase):
     def test_silent_restore_failure_blocks_future_work(self):
         setter = Rng.value.fset
         def write(rng, values):
-            if values == [[100.] * 5]:
+            if values and all(x == 100. for row in values for x in row):
                 return  # Excel принял команду, но не восстановил диапазон
             setter(rng, values)
         with patch.object(Rng, "value", property(Rng.value.fget, write)):
@@ -164,6 +171,21 @@ class Transactions(unittest.TestCase):
              patch.dict(os.environ, {"CF_MAC_BATCH": "1"}):
             self.run_scenario()
         self.assertEqual(self.e._rng("Inputs!C3:G3").value, original)
+        self.assertEqual(self.e.last_transaction["status"], "verified")
+
+    def test_multiline_native_write_is_repaired_rowwise(self):
+        setter = Rng.value.fset
+        def write(rng, values):
+            if rng.r2 > rng.r1:
+                damaged = [list(row) for row in values]
+                damaged[-1] = [None] * len(damaged[-1])
+                return setter(rng, damaged)
+            return setter(rng, values)
+        overrides = [{"ref": "Inputs!C3:G5", "values": [[90.] * 5, [11.] * 5, [2.] * 5]}]
+        with patch.object(Rng, "value", property(Rng.value.fget, write)):
+            result, _ = self.run_scenario(overrides)
+        self.assertEqual(result, [[[992.] * 5]])
+        self.assert_base()
         self.assertEqual(self.e.last_transaction["status"], "verified")
 
 

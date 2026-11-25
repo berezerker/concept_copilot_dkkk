@@ -55,6 +55,8 @@ def _metric_evidence(entry: dict) -> list[dict]:
 
 def _metric_record(s, cid: str, entry: dict, param_entries: list[dict]) -> dict:
     primary, origin = entry["primary"], entry["origin"]
+    raw_unit = primary.get("unit") or ""
+    unit = cg.display_unit(entry["kind"], raw_unit)
     periods = sorted(numeric_years(s.idx, primary["sheet"], primary["row"]))
     affected = [p for p in param_entries if entry["name"] in (p.get("influences") or [])]
     factors = Counter(p["factor_name"] for p in affected)
@@ -70,15 +72,19 @@ def _metric_record(s, cid: str, entry: dict, param_entries: list[dict]) -> dict:
         "group": cg.GROUPS.get(entry["group"], entry["group"]), "metric_kind": entry["kind"],
         "location": {"reported": f"{primary['sheet']}!{primary['row']}",
                      "computed": f"{origin['sheet']}!{origin['row']}",
-                     "label": primary.get("label") or "", "unit": primary.get("unit") or ""},
+                     "label": primary.get("label") or "", "unit": unit, "source_unit": raw_unit},
         "periods": [str(x) for x in periods],
         "shock": {"method": entry.get("shock"), "direct_verified": entry.get("direct_verified"),
                   "reaches": list(entry.get("reaches") or []), "via": entry.get("via")},
         "dependencies": {"parameters": len(affected), "factors": dict(factors.most_common(10))},
         "confidence": {"identity": round(identity, 2), "dependency": graph_conf,
-                       "shock": shock_conf, "unit": 0.9 if primary.get("unit") else 0.45},
+                       "shock": shock_conf, "unit": 0.9 if unit else 0.45},
         "status": status, "evidence": _metric_evidence(entry),
         "alternatives": [f"{x['sheet']}!{x['row']}" for x in entry.get("alternatives") or []],
+        "bindings": [{**x, "source_unit": x.get("unit") or "",
+                      "unit": cg.display_unit(entry["kind"], x.get("unit") or "")}
+                     for x in [primary, *(entry.get("alternatives") or [])]],
+        "binding_confirmed": entry.get("match") == "pinned",
         "note": entry.get("note"),
     }
 

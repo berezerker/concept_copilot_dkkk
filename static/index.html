@@ -384,6 +384,162 @@ function manifestStatusHtml(m){
     ${(r.warnings||[]).map(x=>`<div class="metric" style="color:#9a5a00">⚠ ${esc(x)}</div>`).join('')}`;
 }
 function renderManifestStatus(m){ const box=$('#manifestBox'); if(box) box.innerHTML=manifestStatusHtml(m); }
+
+async function workbookRequest(url, payload){
+  const response=await fetch(url, payload === undefined ? undefined : {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+  });
+  const data=await response.json();
+  if(!response.ok) throw new Error(typeof data.detail==='string' ? data.detail : 'Не удалось выполнить запрос');
+  return data;
+}
+
+async function openBindingReview(){
+  if(!SID || running) return;
+  const sid=SID;
+  const box=add(el(`<div class="chart"><h4>Проверка привязок показателей</h4>
+    <div class="kv" data-note>Загружаю паспорт…</div></div>`));
+  const note=box.querySelector('[data-note]');
+  try{
+    const manifest=await workbookRequest('/api/manifest/'+sid);
+    if(SID!==sid) return;
+    if(!manifest.metrics.length){ note.textContent='В паспорте пока нет показателей.'; return; }
+    note.remove();
+    const form=el(`<form><label>Показатель <select name="metric"></select></label>
+      <p class="kv" data-state></p><label>Строка из паспорта <select name="binding"></select></label>
+      <p><label>Лист <input name="sheet" required></label>
+      <label>Строка <input name="row" min="1" max="1048576" type="number" required></label></p>
+      <button class="btn" type="submit">Подтвердить привязку</button>
+      <div class="kv" role="status"></div></form>`);
+    box.append(form);
+    const {metric,binding,sheet,row}=form.elements;
+    const state=form.querySelector('[data-state]'), status=form.querySelector('[role=status]');
+    manifest.metrics.forEach((m,i)=>metric.add(new Option(m.name,i)));
+    const selected=()=>manifest.metrics[Number(metric.value)];
+    function selectBinding(){
+      const b=selected().bindings[Number(binding.value)];
+      sheet.value=b.sheet; row.value=b.row;
+      state.textContent=(selected().binding_confirmed ? 'Привязка подтверждена. ' : 'Привязка предложена по модели. ')
+        +(b.unit ? 'Единица в паспорте: '+b.unit+'. ' : '')
+        +(b.source_unit && !b.unit ? 'Единица из строки требует проверки: '+b.source_unit+'.' : '');
+    }
+    function selectMetric(){
+      binding.replaceChildren();
+      selected().bindings.forEach((b,i)=>binding.add(new Option(b.sheet+'!'+b.row+' · '+b.label,i)));
+      status.textContent='';
+      selectBinding();
+    }
+    metric.onchange=selectMetric; binding.onchange=selectBinding; selectMetric();
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      if(SID!==sid || running) return;
+      const m=selected();
+      const button=form.querySelector('button');
+      button.disabled=true;
+      try{
+        const response=await workbookRequest(`/api/manifest/${sid}/binding`, {
+          concept:m.catalog_id, sheet:sheet.value, row:Number(row.value), file_hash:manifest.model.file_hash
+        });
+        status.textContent='Сохранено: '+response.binding.where;
+        if(SID===sid){
+          renderManifestStatus(response.manifest);
+          if($('#kmBox')) $('#kmBox').innerHTML=kmHtml(response.card);
+        }
+        m.binding_confirmed=true;
+        state.textContent='Привязка подтверждена: '+response.binding.where;
+      }catch(e){ status.textContent=e.message; }
+      finally{ button.disabled=false; }
+    };
+  }catch(e){ note.textContent=e.message; }
+}
+
+const traceIssues={
+  candidate_limit:'показаны ближайшие кандидаты', dynamic_reference:'есть динамические формулы',
+  range_limit:'некоторые диапазоны слишком велики для трассировки',
+  search_limit:'достигнут предел поиска', unsupported_reference:'есть ссылки, которые карта не раскрывает',
+  unparsed_formula:'часть формул не разобрана'
+};
+
+function cellStressHtml(d){
+  const path=(d.trace.path||[]).map(esc).join(' → ');
+  const val=n=>typeof n==='number' ? n.toLocaleString('ru-RU',{maximumSignificantDigits:10}) : '—';
+  const run=d.rollback_verified;
+  return `<p><b>${esc(d.target_label||'Результат')}</b> <code>${esc(d.target)}</code>${d.period?' · '+esc(d.period):''}
+    ${d.target_formula?'<br><code>'+esc(d.target_formula)+'</code>':''}</p>
+    ${d.binding_confirmed===false?`<p class="kv">Привязка предложена паспортом.
+      ${d.binding_alternatives?.length?'Другие строки: '+d.binding_alternatives.map(esc).join(', ')+'.':''}</p>`:''}
+    ${d.source?`<p>Вход <code>${esc(d.source)}</code> · ${esc(d.source_label)} · ${esc(d.source_period||'период не определён')} ·
+      ${val(d.source_before)} → ${val(run?d.source_after:d.source_proposed)} (${val(run?d.achieved_pct:d.requested_pct)} %)</p>`:''}
+    ${path?`<p>Путь в формулах: <code>${path}</code></p>`:d.source?'<p>Явный путь в формулах не найден. Влияние проверит Excel.</p>':''}
+    ${d.trace.limitations.length?`<p class="kv">${d.trace.limitations.map(x=>esc(traceIssues[x]||x)).join(' · ')}</p>`:''}
+    ${run?`<p>Результат: ${val(d.target_before)} → ${val(d.target_after)} ${esc(d.target_unit)} · изменение ${val(d.target_delta)}.
+      <b>Откат подтверждён.</b></p>`:d.source?`<p>База результата: ${val(d.target_before)}</p>`:''}`;
+}
+
+function openCellStress(){
+  if(!SID || running) return;
+  const sid=SID;
+  const form=add(el(`<form class="chart"><h4>Стресс одной ячейки</h4>
+    <p><label>Адрес результата <input name="target" placeholder="Лист!K18"></label> или
+    <label>показатель <input name="metric" placeholder="DSCR"></label>
+    <label>период <input name="period" placeholder="2027"></label></p>
+    <p><label>Поиск входов <input name="query" placeholder="Фрагмент подписи"></label>
+    <label>Период входа <input name="source_period" placeholder="Любой"></label>
+    <button class="btn" type="button" data-find>Найти входы</button></p>
+    <div data-candidates></div>
+    <p><label>Адрес входа <input name="source" required></label>
+    <label>Изменение, % <input name="pct" type="number" step="any" value="-10" required></label>
+    <button class="btn">Проверить план</button>
+    <button class="btn" type="button" data-run disabled>Пересчитать в Excel</button></p>
+    <div data-result role="status"></div></form>`));
+  const field=name=>form.elements[name].value.trim();
+  const result=form.querySelector('[data-result]'), candidates=form.querySelector('[data-candidates]');
+  const run=form.querySelector('[data-run]'), find=form.querySelector('[data-find]');
+  const url='/api/cell-stress/'+sid;
+  let plan=null, pending=false, revision=0;
+  function invalidate(){ revision++; plan=null; run.disabled=true; }
+  form.addEventListener('input',invalidate);
+  const target=()=>field('target') ? {target:field('target')} : {metric:field('metric'),period:field('period')};
+  async function inspect(payload, show){
+    if(SID!==sid || running || pending) return;
+    pending=true;
+    invalidate();
+    const stamp=revision;
+    result.textContent='Проверяю…';
+    try{
+      const data=await workbookRequest(url,payload);
+      if(stamp===revision && SID===sid){ result.innerHTML=cellStressHtml(data); show(data); }
+    }catch(e){ if(stamp===revision) result.textContent=e.message; }
+    finally{ pending=false; }
+  }
+  find.onclick=()=>inspect({...target(),query:field('query'),source_period:field('source_period')},data=>{
+    candidates.replaceChildren();
+    for(const c of data.trace.candidates){
+      const button=el(`<button type="button" class="btn" title="${esc(c.path.join(' → '))}">${esc(c.ref)} · ${esc(c.label||'без подписи')}${c.period?' · '+esc(c.period):''}</button>`);
+      button.onclick=()=>{ form.elements.source.value=c.ref; invalidate(); };
+      candidates.append(button);
+    }
+    if(!candidates.children.length) candidates.textContent='Подходящие входы не найдены. Можно указать адрес вручную.';
+  });
+  form.onsubmit=event=>{
+    event.preventDefault();
+    inspect({...target(),source:field('source'),source_period:field('source_period'),pct:Number(field('pct'))},
+            data=>{ plan=data; run.disabled=false; });
+  };
+  run.onclick=async()=>{
+    if(!plan || SID!==sid || running) return;
+    const p=plan;
+    invalidate();
+    running=true; $('#send').disabled=true;
+    result.textContent='Пересчитываю в Excel и проверяю откат…';
+    try{
+      const d=await workbookRequest(url,{run:true,target:p.target,source:p.source,pct:p.requested_pct,
+                                      file_hash:p.file_hash,expected_input:p.source_before});
+      result.innerHTML=cellStressHtml(d);
+    }catch(e){ result.textContent=e.message; }
+    finally{ running=false; $('#send').disabled=false; }
+  };
+}
 function renderParams(d, body){
   const P=d.parameters||[], o=d.overview||{};
   const row=p=>`<tr data-s="${esc((p.name+' '+p.label+' '+(p.block||'')+' '+p.sheet+' '+p.factor+' '+(p.sub||'')).toLowerCase())}"><td><b>${esc(p.name)}</b>${p.label&&p.label!==p.name?'<br><span style="color:var(--muted);font-size:12px">'+esc(p.label)+'</span>':''}</td><td class="mono">${esc(p.ref)}${p.scalar?'<br><span style="color:var(--muted)">одна ячейка</span>':''}</td><td style="font-size:12px">${esc(p.block||'')}</td><td>${esc(p.factor)}${p.sub?' / '+esc(p.sub):''}</td><td style="font-size:12px">${esc(Object.entries(p.values||{}).slice(0,3).map(([k,v])=>k+': '+v).join(' · '))} ${esc(p.unit||'')}</td><td style="font-size:12px">${p.influences?esc(p.influences.slice(0,4).join(', '))+(p.influences.length>4?'…':''):'<span style="color:#9a5a00">не доходит до ключевых показателей</span>'}</td></tr>`;
@@ -417,7 +573,9 @@ function renderCard(d){
   const flows = c.sheet_flows.slice(0,8).map(f=>`<div class="metric">${esc(f.from)} → ${esc(f.to)} <span style="color:var(--muted)">(${f.refs})</span></div>`).join('');
   $('#card').innerHTML = `
     <div class="sec"><h3>Карточка модели</h3><div class="kv"><b>${esc(c.file)}</b><br>${c.sheets_total} листов · ${c.formulas_total.toLocaleString('ru-RU')} формул<br>${esc(c.template)}<br>итеративный расчёт: ${c.iterative_calc?'да (циклические ссылки)':'нет'}<br>прогноз по умолчанию с <b>${c.forecast_start??'—'}</b></div></div>
-    <div class="sec"><h3>Готовность паспорта модели</h3><div id="manifestBox">${manifestStatusHtml(d.manifest)}</div></div>
+    <div class="sec"><h3>Готовность паспорта модели</h3><div id="manifestBox">${manifestStatusHtml(d.manifest)}</div>
+      <button class="btn" id="reviewBindings">Проверить привязки</button>
+      <button class="btn" id="cellStress">Стресс ячейки</button></div>
     ${d.engine?'':`<div class="sec warn">Пересчёт недоступен: ${esc(d.engine_error||'')}. Работают поиск и чтение, стресс-тесты — нет.</div>`}
     <div class="sec"><h3>Смысл модели: экономические факторы</h3><div id="semBox"></div></div>
     <div class="sec"><h3>Листы по ролям</h3><div class="sheetlist">${sheets}</div></div>
@@ -425,6 +583,8 @@ function renderCard(d){
     ${notes?`<div class="sec"><h3>Особенности книги</h3>${notes}</div>`:''}
     <div class="sec"><h3>Главные допущения</h3>${drivers||'<div class="kv">не найдены</div>'}</div>
     <div class="sec"><h3>Потоки между листами</h3>${flows}</div>`;
+  $('#reviewBindings').onclick=openBindingReview;
+  $('#cellStress').onclick=openCellStress;
 }
 
 const EXAMPLES = [

@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter, column_index_from_string
 
 warnings.filterwarnings("ignore", module="openpyxl")
 
-INDEX_VERSION = 8
+INDEX_VERSION = 9
 YEAR_MIN, YEAR_MAX = 1990, 2070
 LABEL_COLS = 10            # подписи ищем в первых N столбцах (или до первого столбца с годами)
 MAX_RANGE_ROWS = 300       # диапазоны длиннее не разворачиваем в граф строк
@@ -239,6 +239,7 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
     say("Читаю формулы…")
     wb_f = openpyxl.load_workbook(path, read_only=True, data_only=False)
     raw = {}
+    read_warnings = []
     for ws in wb_f.worksheets:
         rows = {}
         try:
@@ -248,8 +249,8 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                     if v is None:
                         continue
                     rows.setdefault(c.row, {})[c.column] = v
-        except Exception:  # битые data validation и т.п. — пропускаем лист частично
-            pass
+        except Exception as exc:
+            read_warnings.append(f"Лист «{ws.title}»: формулы прочитаны не полностью ({type(exc).__name__}); карта может быть неполной.")
         raw[ws.title] = rows
     iterate = False
     try:
@@ -271,8 +272,8 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                     if v is None:
                         continue
                     rows.setdefault(c.row, {})[c.column] = v
-        except Exception:
-            pass
+        except Exception as exc:
+            read_warnings.append(f"Лист «{ws.title}»: значения прочитаны не полностью ({type(exc).__name__}); результаты анализа могут быть неполными.")
         cached[ws.title] = rows
     wb_v.close()
 
@@ -280,6 +281,7 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
     sheets = {}
     precedents = defaultdict(set)
     sheet_edges = defaultdict(int)
+    truncated_ranges = 0
     for name, rows in raw.items():
         si = SheetInfo(name=name, role="calc", topic=sheet_topic(name))
         crow = cached.get(name, {})
@@ -310,6 +312,7 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                         si.dynamic += 1
                     for sh, r1, r2 in _parse_refs(v, name, defnames):
                         if r2 - r1 > MAX_RANGE_ROWS:
+                            truncated_ranges += 1
                             r2 = r1 + MAX_RANGE_ROWS
                         for rr in range(r1, r2 + 1):
                             if (sh, rr) != (name, r):
@@ -351,6 +354,9 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
     say("Определяю структуру книги: роли листов, наборы сценариев…")
     from .structure import analyze
     analyze(idx, raw, cached)
+    idx.warnings.extend(read_warnings)
+    if truncated_ranges:
+        idx.warnings.append(f"{truncated_ranges} ссылок на длинные диапазоны частично включены в граф зависимостей; карта может быть неполной.")
     idx.build_seconds = round(time.time() - t0, 1)
     if cache_dir:
         with open(cpath, "wb") as f:

@@ -124,7 +124,7 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                     if receipts and isinstance(result, dict):
                         result = dict(result, execution={"scenarios": getattr(engine, "n_scen", 0) - seq,
                                                        "recent_transactions": receipts[-5:]})
-                    if getattr(engine, "_tainted", False):
+                    if receipts and getattr(engine, "_tainted", False):
                         raise RuntimeError("Excel не восстановлен; результат инструмента нельзя использовать")
             except Exception as e:
                 from ..logbus import Cancelled

@@ -88,6 +88,27 @@ class Harness(unittest.TestCase):
         self.assertFalse(answer["complete"])
         self.assertIn("JSON-объектом", answer["text"])
 
+    def test_tainted_engine_still_allows_plan_to_record_failure(self):
+        engine = SimpleNamespace(_tainted=False, n_scen=0, transactions=[])
+        def work(s, args, emit):
+            engine.n_scen += 1
+            engine.transactions.append({"sequence": engine.n_scen, "status": "restore_failed", "restored": False})
+            engine._tainted = True
+            return {"value": 42}
+        s = SimpleNamespace(plan=None, history=[], id="harness-test", lock=threading.Lock(), engine=engine,
+                            manifest={}, refresh_manifest=lambda: None)
+        events = []
+        tools = {"create_plan": {"fn": t_create_plan}, "update_plan": {"fn": t_update_plan}, "work": {"fn": work}}
+        responses = [call("create_plan", steps=["Расчёт"]), call("work"),
+                     call("update_plan", step=1, status="skipped", note="Excel требует перезагрузки")]
+        with patch("app.agent.harness.system_prompt", return_value="test"), \
+             patch("app.agent.harness.TOOL_MAP", tools), patch("app.workbook.manifest.summary", return_value={}):
+            run_turn(s, Script(responses), "Сделай расчёт", lambda k, d: events.append((k, d)))
+        answer = events[-1][1]
+        self.assertFalse(answer["complete"])
+        self.assertIn("Excel не восстановлен", answer["text"])
+        self.assertNotIn("update_plan", answer["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

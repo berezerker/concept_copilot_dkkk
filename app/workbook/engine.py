@@ -18,7 +18,7 @@ import subprocess
 import sys
 import threading
 
-from .transaction import RestorationError, same_values, validate_overrides
+from .transaction import RestorationError, same_values, split_ref, validate_overrides
 
 # Все сессии на Mac используют один процесс Excel. Сценарий и откат не должны
 # перемежаться с чтением/записью другой сессии даже при разных worker-потоках.
@@ -368,8 +368,8 @@ class ExcelEngine(CalcEngine):
             self.iteration_on = None
 
     def _rng(self, ref):
-        sheet, addr = ref.rsplit("!", 1)
-        return self.wb.sheets[sheet.strip("'").replace("''", "'")].range(addr.replace("$", ""))
+        sheet, addr = split_ref(ref)
+        return self.wb.sheets[sheet].range(addr)
 
     def _read(self, refs):
         if getattr(self, "_tainted", False):
@@ -580,7 +580,7 @@ class ExcelEngine(CalcEngine):
         preflight = validate_overrides(overrides)
         # Свежий снимок: Excel может быть изменён пользователем между сценариями.
         self._box_cache = {}
-        if platform.system() == "Darwin":
+        if platform.system() == "Darwin" and all("expected_input" not in o for o in overrides):
             merged = self._coalesce(overrides)
             try:
                 validate_overrides(merged)
@@ -601,7 +601,10 @@ class ExcelEngine(CalcEngine):
             r = self._rng(o["ref"])
             f = r.options(ndim=2).formula
             pure = all(not (isinstance(x, str) and x.startswith("=")) for row in f for x in row)
-            saved.append((o["ref"], r, f, r.options(ndim=2).value if pure else None))
+            original = r.options(ndim=2).value if pure else None
+            if "expected_input" in o and (not pure or not same_values(original, o["expected_input"], tol=0)):
+                raise ValueError(f"{o['ref']}: допущение изменилось или стало формулой. Проверьте ячейку заново.")
+            saved.append((o["ref"], r, f, original))
         # Даты и другие типы передаём через нативный bridge, а не превращаем в строки AppleScript.
         if batch:
             blocks = [o["values"] for o in overrides] + [orig if orig is not None else f for _, _, f, orig in saved]
@@ -613,9 +616,11 @@ class ExcelEngine(CalcEngine):
             t = time.time()
             if batch:
                 _applescript_batch(self.wb.name, [(*self._split(o["ref"]), "value", o["values"]) for o in overrides])
+                for o, (_, r, _, _) in zip(overrides, saved):
+                    self._ensure_written(o["ref"], r, "value", o["values"], block_written=True)
             else:
                 for o, (_, r, _, _) in zip(overrides, saved):
-                    r.value = o["values"]
+                    self._ensure_written(o["ref"], r, "value", o["values"])
             T["write"] = time.time() - t
             t = time.time()
             iters = self._converge(watch)
@@ -664,6 +669,7 @@ class ExcelEngine(CalcEngine):
             except Exception:
                 self._batch_broken = True
         errors = []
+        restored_refs = set()
         if not restored_batch:
             for ref, r, f, orig in saved:
                 try:
@@ -671,22 +677,15 @@ class ExcelEngine(CalcEngine):
                         r.value = orig
                     else:
                         r.formula = f
-                except Exception as e:
-                    errors.append(f"{ref}: {e}")
+                    restored_refs.add(ref)
+                except Exception:
+                    pass  # точный повтор и итоговая ошибка — ниже; остальные блоки всё равно восстанавливаем
         # Проверяем каждый диапазон, даже если восстановление другого не удалось.
         for ref, r, f, orig in saved:
             try:
-                actual = r.options(ndim=2).value if orig is not None else r.options(ndim=2).formula
-                if restored_batch and not same_values(actual, orig if orig is not None else f, tol=0):
-                    # Успешный AppleScript может округлить число. Повторяем этот блок
-                    # нативной записью и снова проверяем; допуск исходных значений не ослабляем.
-                    if orig is not None:
-                        r.value = orig
-                    else:
-                        r.formula = f
-                    actual = r.options(ndim=2).value if orig is not None else r.options(ndim=2).formula
-                if not same_values(actual, orig if orig is not None else f, tol=0):
-                    errors.append(f"{ref}: значения/формулы не восстановлены")
+                self._ensure_written(ref, r, "value" if orig is not None else "formula",
+                                     orig if orig is not None else f,
+                                     block_written=restored_batch or ref in restored_refs)
             except Exception as e:
                 errors.append(f"{ref}: {e}")
         if errors:
@@ -695,9 +694,45 @@ class ExcelEngine(CalcEngine):
         if not same_values(self._read_raw(watch), baseline):
             raise RestorationError("Контрольные показатели после отката отличаются от базы")
 
+    def _ensure_written(self, ref, rng, kind, expected, block_written=False):
+        """Записать матрицу и подтвердить точное значение.
+
+        Excel for Mac иногда принимает многорядную запись без ошибки, но раскладывает
+        элементы по диапазону неверно. После обычной/пакетной записи проверяем диапазон,
+        затем деградируем до строк и, если нужно, до отдельных ячеек.
+        """
+        from openpyxl.utils.cell import get_column_letter, range_boundaries
+
+        prop = "value" if kind == "value" else "formula"
+
+        def read(target):
+            return getattr(target.options(ndim=2), prop)
+
+        def write(target, values):
+            setattr(target, prop, values)
+
+        if not block_written:
+            write(rng, expected)
+        if same_values(read(rng), expected, tol=0):
+            return
+
+        sheet, addr = self._split(ref)
+        c1, r1, c2, r2 = range_boundaries(addr)
+        for offset, row in enumerate(expected):
+            row_ref = f"'{sheet.replace(chr(39), chr(39) * 2)}'!{get_column_letter(c1)}{r1 + offset}:{get_column_letter(c2)}{r1 + offset}"
+            write(self._rng(row_ref), [row])
+        if same_values(read(rng), expected, tol=0):
+            return
+
+        for i, row in enumerate(expected):
+            for j, value in enumerate(row):
+                cell_ref = f"'{sheet.replace(chr(39), chr(39) * 2)}'!{get_column_letter(c1 + j)}{r1 + i}"
+                write(self._rng(cell_ref), [[value]])
+        if not same_values(read(rng), expected, tol=0):
+            raise RestorationError(f"{ref}: значения/формулы не записаны точно")
+
     def _split(self, ref):
-        sheet, addr = ref.rsplit("!", 1)
-        return sheet.strip("'").replace("''", "'"), addr.replace("$", "")
+        return split_ref(ref)
 
     def _close(self):
         try:

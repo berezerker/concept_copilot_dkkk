@@ -69,8 +69,9 @@ def _load_into_session(path, filename, session_id=None, keep=False):
     from .logbus import BUS
     oid = BUS.begin(f"Загрузка модели «{filename}»", s.id)
     try:
-        card = s.load(path, filename, config.cache_dir(), config.env("CF_ENGINE"),
-                      progress=lambda m: (BUS.log(m, "progress", sid=s.id), BUS.step(oid, m)))
+        with s.lock:
+            card = s.load(path, filename, config.cache_dir(), config.env("CF_ENGINE"),
+                          progress=lambda m: (BUS.log(m, "progress", sid=s.id), BUS.step(oid, m)))
         BUS.end(oid, True, f"{card['sheets_total']} листов, {card['formulas_total']} формул, движок: "
                            f"{s.engine.name if s.engine_open else 'нет — ' + str(s.engine_error)[:120]}")
     except Exception as e:
@@ -500,7 +501,63 @@ def model_manifest(session_id: str):
     """Единый паспорт модели для UI и внешних интеграций."""
     from .workbook import manifest as mf
     s = _session(session_id)
-    return s.refresh_manifest() or mf.build(s)
+    with s.lock:
+        return s.refresh_manifest() or mf.build(s)
+
+
+class BindingIn(BaseModel):
+    concept: str
+    sheet: str
+    row: int
+    file_hash: str
+
+
+@app.post("/api/manifest/{session_id}/binding")
+def confirm_binding(session_id: str, req: BindingIn):
+    from .agent.tools import t_catalog_set
+    from .workbook.manifest import summary
+    s = _session(session_id)
+    with s.lock:
+        if s.idx.file_hash != req.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте список привязок заново.")
+        if req.concept not in s.catalog["concepts"]:
+            raise HTTPException(400, "Показатель не найден в паспорте")
+        try:
+            result = t_catalog_set(s, req.model_dump(), lambda *_: None)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"binding": result, "manifest": summary(s.manifest), "card": s.card}
+
+
+class CellStressIn(BaseModel):
+    target: str | None = None
+    metric: str | None = None
+    period: str | None = None
+    source_period: str | None = None
+    query: str | None = None
+    source: str | None = None
+    pct: float | None = None
+    file_hash: str | None = None
+    expected_input: float | None = None
+    run: bool = False
+
+
+@app.post("/api/cell-stress/{session_id}")
+def cell_stress(session_id: str, req: CellStressIn):
+    from .agent.tools_probe import inspect_cell_stress, run_cell_stress
+    from .workbook.transaction import RestorationError
+    s = _session(session_id)
+    with s.lock:
+        if req.file_hash and req.file_hash != s.idx.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте сценарий заново.")
+        fn = run_cell_stress if req.run else inspect_cell_stress
+        try:
+            return fn(s, req.model_dump(), lambda *_: None)
+        except RestorationError as exc:
+            s.refresh_manifest()
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, KeyError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/audit/{session_id}")

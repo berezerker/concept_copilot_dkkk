@@ -756,10 +756,12 @@ def _merge_overrides(overrides):
 
 
 def _metric_refs(s, metrics, years):
+    from ..workbook import catalog as cg
+
     out = []
+    entries = (getattr(s, "catalog", None) or {}).get("concepts", {})
     for m in metrics[:MAX_METRICS]:
         if m.get("concept") and not m.get("sheet"):           # показатель по справочнику
-            from ..workbook import catalog as cg
             e = cg.resolve(s, m["concept"])
             m = dict(m, sheet=e["primary"]["sheet"], row=e["primary"]["row"], name=m.get("name") or e["name"])
         sh = s.idx.sheet(m["sheet"])
@@ -775,7 +777,13 @@ def _metric_refs(s, metrics, years):
         if not cols:
             raise ValueError(f"У метрики {sh.name}!{row} нет значений за выбранные годы")
         refs = ref_for(s.idx, sh.name, row, cols.keys())
-        out.append({"sheet": sh.name, "row": row, "name": m.get("name") or ri.label[:60], "unit": ri.unit,
+        entry = entries.get(m.get("concept"))
+        kind = (entry or {}).get("kind")
+        if kind is None:
+            kind = next((e["kind"] for e in entries.values()
+                         if e["kind"] == "ratio" and (e["primary"]["sheet"], e["primary"]["row"]) == (sh.name, row)), None)
+        out.append({"sheet": sh.name, "row": row, "name": m.get("name") or ri.label[:60],
+                    "unit": cg.display_unit(kind, ri.unit),
                     "years": list(cols.values()), "refs": refs})
     return out
 
@@ -980,7 +988,7 @@ def t_get_catalog(s, a, emit):
             continue
         p, o = e["primary"], e["origin"]
         concepts.append({"id": e["id"], "name": e["name"], "group": cg.GROUPS.get(e["group"], e["group"]), "kind": e["kind"],
-                         "where": f"{p['sheet']}!{p['row']}", "label": p["label"][:70], "unit": p["unit"],
+                         "where": f"{p['sheet']}!{p['row']}", "label": p["label"][:70], "unit": cg.display_unit(e["kind"], p["unit"]),
                          "computed_in": f"{o['sheet']}!{o['row']}" if (o["sheet"], o["row"]) != (p["sheet"], p["row"]) else None,
                          "shock": e["shock"], "direct_shock_reaches": [cg.BY_ID[r]["name"] for r in e.get("reaches", []) if r in cg.BY_ID],
                          "depends_on_inputs": e["inputs"], "found_by": e["match"], "confidence": e["confidence"],
@@ -1037,13 +1045,25 @@ def t_find_parameters(s, a, emit):
 
 def t_catalog_set(s, a, emit):
     """Закрепить показатель за строкой модели (исправить справочник или добавить свой показатель)."""
-    from ..workbook import catalog as cg
+    from ..workbook import catalog as cg, semantics as sm
     cid = norm(str(a["concept"])).replace(" ", "_")
     known = next((c["id"] for c in cg.CONCEPTS if c["id"] == cid or norm(c["name"]) == norm(str(a["concept"]))), None)
     cid = known or cid
     e = cg.apply_pin(s.idx, s.catalog, cid, a["sheet"], int(a["row"]), s.forecast_start, a.get("name") or (None if known else str(a["concept"])))
     cg.save(s.cache_dir, s.catalog)
     s.refresh_card()
+    if s.sem:
+        previous = s.sem
+        s.sem = sm.build_semantics(s.idx, s.card, s.forecast_start)
+        if previous.get("llm"):
+            for ref, row in s.sem["rows"].items():
+                old = previous["rows"].get(ref, {})
+                if old.get("source") == "llm":
+                    row.update({k: old[k] for k in ("name", "desc", "factor", "sub", "direction", "source") if k in old})
+            s.sem["llm"] = previous["llm"]
+            sm.refresh_formula_words(s.idx, s.sem, s.forecast_start)
+        if s.cache_dir:
+            sm.save(s.cache_dir, s.sem)
     s.refresh_manifest()
     return {"ok": True, "concept": e["id"], "name": e["name"], "where": f"{e['primary']['sheet']}!{e['primary']['row']}",
             "computed_in": f"{e['origin']['sheet']}!{e['origin']['row']}", "shock": e["shock"],
