@@ -35,10 +35,13 @@ def make_sample_session():
     from app.agent.session import Session
     d = tempfile.mkdtemp()
     p = make_sample(os.path.join(d, "sample.xlsx"))
+    if os.environ.get("CF_ENGINE") == "excel":
+        from tests.excel_fixture import calculate_fixture
+        calculate_fixture(p)
     # формулы надо посчитать, чтобы появились кэшированные значения: прогоняем через LibreOffice
     import subprocess, shutil
     so = shutil.which("soffice") or shutil.which("libreoffice")
-    if so:
+    if so and os.environ.get("CF_ENGINE") != "excel":
         subprocess.run([so, "--headless", "--convert-to", "xlsx", "--outdir", os.path.join(d, "calc"), p],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
         p2 = os.path.join(d, "calc", "sample.xlsx")

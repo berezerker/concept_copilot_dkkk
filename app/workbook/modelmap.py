@@ -17,9 +17,29 @@ def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def scalar_cols(sh, ri, ym=None):
+    """Числовые ячейки строки вне шапки периодов — одиночные параметры («Ставка налога | 20%»).
+    Числа левее подписи считаем нумерацией, а не параметром."""
+    ym = sh.years_for(ri.row) if ym is None else ym
+    return [c for c, v in sorted(ri.values.items())
+            if _num(v) and c not in ym and c > (ri.label_col or 0)] + \
+           [c for c in sorted(ri.formulas) if c not in ym and c > (ri.label_col or 0) and not _num(ri.values.get(c))]
+
+
+def is_scalar_row(sh, ri):
+    """Строка-параметр без ряда по периодам: значения лежат вне столбцов лет (или на листе нет шапки лет)."""
+    ym = sh.years_for(ri.row)
+    if not ym:
+        return any(_num(v) for v in ri.values.values())
+    if any(c in ri.formulas or _num(ri.values.get(c)) for c in ym):
+        return False
+    return bool(scalar_cols(sh, ri, ym))
+
+
 def row_class(idx: WorkbookIndex, sheet: str, row: int, forecast_start=None) -> str:
     """input — числа без формул; link — прогноз из простых ссылок (=Лист!A1); calc — расчёт;
-    mixed — числа и формулы вперемешку в прогнозе; text — без чисел."""
+    mixed — числа и формулы вперемешку в прогнозе; text — без чисел.
+    Работает и для строк-параметров без ряда по годам (одна ячейка со значением)."""
     sh = idx.sheets[sheet]
     ri = sh.rows.get(row)
     if not ri:
@@ -31,6 +51,14 @@ def row_class(idx: WorkbookIndex, sheet: str, row: int, forecast_start=None) -> 
     if not f and not n:
         if not ym and any(_num(v) for v in ri.values.values()):
             return "input" if not ri.formulas else "calc"
+        if ym and not any(c in ri.formulas or _num(ri.values.get(c)) for c in ym):
+            sc = scalar_cols(sh, ri, ym)                       # параметр в стороне от шапки лет
+            if sc:
+                fs_ = [c for c in sc if c in ri.formulas]
+                ns_ = [c for c in sc if c not in ri.formulas]
+                if ns_:
+                    return "input"
+                return "link" if all(LINK_RE.match(ri.formulas[c]) for c in fs_) else "calc"
         return "text"
     if f and n:
         return "mixed"
@@ -41,8 +69,10 @@ def row_class(idx: WorkbookIndex, sheet: str, row: int, forecast_start=None) -> 
     return "calc"
 
 
-def upstream_inputs(idx: WorkbookIndex, sheet: str, row: int, forecast_start=None, max_nodes=60000):
-    """Все строки-допущения (input/mixed), от которых по графу зависит строка: по всей книге."""
+def upstream_inputs(idx: WorkbookIndex, sheet: str, row: int, forecast_start=None, max_nodes=60000, skip_inactive=True):
+    """Все строки-допущения (input/mixed), от которых по графу зависит строка: по всей книге.
+    Допущения на невыбранных наборах сценариев (листы-близнецы) по умолчанию не возвращаются."""
+    inactive = getattr(idx, "inactive", None) or set()
     seen, stack, out = {(sheet, row)}, [(sheet, row, 0)], []
     while stack and len(seen) < max_nodes:
         s, r, d = stack.pop()
@@ -56,13 +86,25 @@ def upstream_inputs(idx: WorkbookIndex, sheet: str, row: int, forecast_start=Non
             if p[1] in shp.headers or p[1] == shp.header_row:      # строка-заголовок с годами — не допущение
                 continue
             cls = row_class(idx, p[0], p[1], forecast_start)
-            if cls in ("input", "mixed"):
+            if cls in ("input", "mixed") and not (skip_inactive and p[0] in inactive):
                 ri = idx.sheets[p[0]].rows.get(p[1])
                 if ri is not None:
                     out.append({"sheet": p[0], "row": p[1], "label": ri.label, "unit": ri.unit, "class": cls,
                                 "depth": d + 1, "fanout": len(idx.dependents.get(p, ()))})
             stack.append((p[0], p[1], d + 1))
     return out, len(seen)
+
+
+def downstream_count(idx: WorkbookIndex, sheet: str, row: int, limit=4000) -> int:
+    """Сколько строк зависит от данной (транзитивно, с ограничением) — «влиятельность» строки."""
+    seen, stack = {(sheet, row)}, [(sheet, row)]
+    while stack and len(seen) < limit:
+        n = stack.pop()
+        for d in idx.dependents.get(n, ()):
+            if d not in seen:
+                seen.add(d)
+                stack.append(d)
+    return len(seen) - 1
 
 
 def sheet_layers(idx: WorkbookIndex):
@@ -157,8 +199,6 @@ def audit(idx: WorkbookIndex, forecast_start=None, limit=25):
     # 2) числа, вбитые в прогнозе посреди формул
     hard = []
     for sh in idx.sheets.values():
-        if sh.role in ("inputs", "contents"):
-            continue
         for r, ri in sh.rows.items():
             ym = sh.years_for(r)
             fc = [c for c, y in sorted(ym.items()) if forecast_start is None or y >= forecast_start]
@@ -197,23 +237,25 @@ def audit(idx: WorkbookIndex, forecast_start=None, limit=25):
     if ext:
         findings.append({"level": "warning", "type": "Ссылки на внешние книги", "where": f"{ext[0][0]}!{ext[0][1]}",
                          "text": f"{len(ext)} строк ссылаются на другие файлы — при пересчёте значения не обновятся"})
-    # 5) одна и та же кредитная метрика на разных итоговых листах — с разными значениями
-    keys = {"DSCR": r"^dscr$", "ISCR": r"^(iscr|icr)$", "Net Debt / EBITDA": r"^(net debt|чистый долг) ?/ ?ebitda$",
-            "Debt / EBITDA": r"^(debt|долг) ?/ ?ebitda$"}
+    # 5) один и тот же коэффициент на разных листах — с разными значениями (кандидаты из лексикона показателей)
+    from .concepts import CONCEPTS, match_level
     groups = defaultdict(list)
-    for sh in idx.sheets.values():
-        if sh.role not in ("dashboard", "outputs"):
+    for c in CONCEPTS:
+        if c["kind"] != "ratio":
             continue
-        for r, ri in sh.rows.items():
-            lab = re.sub(r"\s+", " ", (ri.label or "").lower().replace("ё", "е")).strip()
-            for k, rx in keys.items():
-                if re.match(rx, lab):
-                    vals = {y: ri.values.get(c) for c, y in sh.years_for(r).items() if _num(ri.values.get(c))}
+        for sh in idx.sheets.values():
+            if not sh.years or sh.name in getattr(idx, "inactive", ()):
+                continue
+            for r, ri in sh.rows.items():
+                if ri.label and match_level(c, ri.label) >= 3:
+                    vals = {y: ri.values.get(cc) for cc, y in sh.years_for(r).items() if _num(ri.values.get(cc))}
                     if len(vals) >= 3:
-                        groups[k].append((sh.name, r, vals))
+                        groups[c["name"]].append((sh.name, r, vals))
     for k, rows in groups.items():
         ref = rows[0]
         for b_ in rows[1:]:
+            if b_[0] == ref[0]:
+                continue
             common = [y for y in ref[2] if y in b_[2] and (forecast_start is None or y >= forecast_start)]
             diff = [(y, ref[2][y], b_[2][y]) for y in common
                     if abs(ref[2][y] - b_[2][y]) > 0.02 * max(1e-9, abs(ref[2][y]), abs(b_[2][y]))]
@@ -237,6 +279,9 @@ def audit(idx: WorkbookIndex, forecast_start=None, limit=25):
                     findings.append({"level": "warning", "type": "Минимум/максимум по факту и прогнозу",
                                      "where": f"{sh.name}!{col_letter(next(iter(ri.formulas)))}{r}",
                                      "text": f"«{ri.label[:50]}» = {m.group(1)} по диапазону с {y0} года — включает фактические годы"})
+    # 7) что в книге видно неполно: динамические ссылки, вертикальные листы, непроверенный набор сценария
+    for w in getattr(idx, "warnings", []) or []:
+        findings.append({"level": "info", "type": "Ограничение анализа", "where": "книга", "text": w})
     # сворачиваем однотипные замечания на одном листе: первые 3 подробно, остальные — одной строкой
     grouped, by = [], defaultdict(list)
     for f in findings:

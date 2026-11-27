@@ -27,11 +27,27 @@ feature/…       ●──●            ●─●             одна зад�
 1. `git switch develop && git pull`
 2. `git switch -c feature/имя`
 3. Небольшие коммиты, сообщение в повелительном наклонении: «Добавить пакетное чтение строк в Excel-движок».
-4. Перед PR — быстрые тесты (одна минута, без Excel и сети):
+4. Перед PR — проверки без Excel и сети:
    ```
+   python tests/test_excel_engine.py && python tests/test_transactions.py \
+     && python tests/test_harness.py && python tests/test_grading.py \
+     && python tests/test_index_limitations.py && python tests/test_cell_trace.py
+   ```
+   Интеграционные тесты с установленным Microsoft Excel (без запросов к LLM):
+   ```
+   export CF_ENGINE=excel
    python tests/test_tools.py && python tests/test_credit.py && python tests/test_connectors.py \
-     && python tests/test_excel_engine.py && python tests/test_grading.py
+     && python tests/test_catalog.py && python tests/test_manifest.py
    ```
+   В Excel-режиме подготовка кэша формул синтетических книг также выполняется Excel, без `soffice`.
+   Для приёмки конкретного драйвера на большой обезличенной модели выполните
+   `python -m tests.e2e.verify_cell_stress --model путь.xlsx --metric dscr --period 2026 --driver-query цена --driver-period 2026`.
+   Выберите поисковую подпись и период, присутствующие в книге. Проверка подтверждает привязку в отдельном кэше,
+   находит цепочку, сравнивает эффект −10% и сверяет базу после отката. Она выполняется локально через Excel.
+   Для нескольких периодов и совместного шока используйте
+   `python -m tests.e2e.verify_stress_matrix --model путь.xlsx --metric dscr --period 2026 --period 2027 --driver цена -10 --driver ставка 10`.
+   Проверка измеряет эффект каждого входа, сверяет совместные сценарии при разном порядке записей и сравнивает
+   итог инструмента агента с прямым пересчётом Excel. После каждого сценария проверяется возврат к общей базе.
 5. PR в `develop`, описание: что поменялось и как проверено. Слияние — squash, ветку удалить.
 
 ## Релиз

@@ -47,7 +47,10 @@ def build_all(out_dir):
     for name, header in VARIANTS.items():
         per = 12 if "monthly" in name else (2 if "half" in name else 4)
         p = make(os.path.join(out_dir, f"{name}.xlsx"), header, per)
-        if so:   # посчитать кэш значений
+        if os.environ.get("CF_ENGINE") == "excel":
+            from tests.excel_fixture import calculate_fixture
+            calculate_fixture(p)
+        if so and os.environ.get("CF_ENGINE") != "excel":
             subprocess.run([so, "--headless", "--convert-to", "xlsx", "--outdir", os.path.join(out_dir, "calc"), p],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
             p2 = os.path.join(out_dir, "calc", f"{name}.xlsx")

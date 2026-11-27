@@ -59,6 +59,8 @@ class Recorder:
                 print(f"       ✗ {data['name']}: {str(err)[:400]}", flush=True)
         elif kind == "answer":
             self.answer = (self.answer + "\n\n" if self.answer else "") + data.get("text", "")
+            if data.get("complete") is False:
+                self.error = "Harness не подтвердил завершение задачи"
         elif kind == "error":
             self.error = data.get("text")
         elif self.verbose and kind in ("status", "progress"):

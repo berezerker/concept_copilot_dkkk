@@ -12,7 +12,9 @@ from collections import Counter, defaultdict
 
 from ..workbook import semantics as sm
 from ..workbook.card import numeric_years
+from ..workbook.modelmap import is_scalar_row
 from ..workbook.modelmap import upstream_inputs  # noqa: F401
+from ..workbook.transaction import RestorationError
 from .tools import METRIC_SCHEMA, _metric_refs, rnd
 from .tools_ext import RULE_SCHEMA, _agg, _base_series, _fy, _run
 
@@ -45,15 +47,13 @@ def _groups(s, metric_ref, level="factor"):
     """Строки-допущения выше метрики, сгруппированные по фактору (или подфактору)."""
     sh, r = metric_ref
     ups, _ = upstream_inputs(s.idx, sh, r, s.forecast_start)
-    prim = sm._primary_inputs(s.idx)
     groups = defaultdict(list)
     for u in ups:
         if not u["fanout"]:
             continue
-        if s.idx.sheets[u["sheet"]].role == "inputs" and u["sheet"] != prim:
-            continue
         ys = [y for y in numeric_years(s.idx, u["sheet"], u["row"]) if not s.forecast_start or y >= s.forecast_start]
-        if not ys:
+        shx = s.idx.sheets[u["sheet"]]
+        if not ys and not is_scalar_row(shx, shx.rows[u["row"]]):      # ни ряда в прогнозе, ни параметра одной ячейкой
             continue
         hi = sm.info(s, u["sheet"], u["row"])
         key = (hi["factor"], hi["sub"]) if level == "sub" and hi["sub"] else (hi["factor"], "")
@@ -117,14 +117,13 @@ def scan(s, metrics, hows, shock=10.0, level="factor", years=None, emit=None, co
         rows = groups[k][:max_rows]
         if emit:
             emit("progress", {"text": f"Пересчёт {i + 1}/{len(runs)}: {_gname(s, k)} ({len(rows)} строк) −{shock:g}%"})
-        shocks = [{"sheet": x["sheet"], "row": x["row"], "op": "pct", "value": -shock, "_quiet": True} for x in rows]
+        shocks = [{"sheet": x["sheet"], "row": x["row"], "op": "pct", "value": -shock, "_quiet": True, "_inputs_only": True} for x in rows]
         try:
             ov, _, _, _ = _build_overrides(s, shocks)
             vals, _ = s.engine.scenario(ov, watch, watch + creads)
+        except RestorationError:
+            raise
         except Exception as e:
-            from ..logbus import Cancelled
-            if isinstance(e, Cancelled):
-                raise
             if kind == "main":
                 for j in range(len(mrefs)):
                     per_metric[j].append({"id": k[1] or k[0], "factor": k[0], "name": _gname(s, k), "rows": len(rows),
@@ -350,13 +349,20 @@ def t_dependency_analysis(s, a, emit):
                 metrics.append({"sheet": km[nm]["sheet"], "row": km[nm]["row"], "name": nm})
             if len(metrics) >= 2:
                 break
+        if not metrics:                                    # в модели нет привычных коэффициентов — берём первые «живые» показатели
+            for m in s.card["key_metrics"]:
+                c = m["candidates"][0]
+                if not c.get("static"):
+                    metrics.append({"sheet": c["sheet"], "row": c["row"], "name": m["metric"]})
+                if len(metrics) >= 2:
+                    break
     metrics = metrics[:3]
     shock = float(a.get("shock_pct", 10))
     hows = [a.get("aggregate") or ("max" if (m.get("_op") in ("<=", "<") or "долг" in (m.get("name") or "").lower()) else "min")
             for m in metrics]
     clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in metrics]
     import json as _json
-    ckey = _json.dumps([[m["sheet"], int(m["row"]), h] for m, h in zip(clean, hows)] + [shock, a.get("years"),
+    ckey = _json.dumps([[m["sheet"], int(m["row"]), h] for m, h in zip(clean, hows)] + ["verified_restore", shock, a.get("years"),
                        bool(a.get("couplings", True))], ensure_ascii=False)
     cache = s.sem.setdefault("deps_cache", {}) if s.sem is not None else {}
     if ckey in cache and not a.get("force"):

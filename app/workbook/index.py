@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter, column_index_from_string
 
 warnings.filterwarnings("ignore", module="openpyxl")
 
-INDEX_VERSION = 6
+INDEX_VERSION = 9
 YEAR_MIN, YEAR_MAX = 1990, 2070
 LABEL_COLS = 10            # подписи ищем в первых N столбцах (или до первого столбца с годами)
 MAX_RANGE_ROWS = 300       # диапазоны длиннее не разворачиваем в граф строк
@@ -34,6 +34,12 @@ REF_RE = re.compile(
     r"(?<![A-Za-z0-9_\.])\$?([A-Z]{1,3})\$?([0-9]{1,7})(?::\$?([A-Z]{1,3})\$?([0-9]{1,7}))?(?![\w(])"
 )
 STR_RE = re.compile(r'"[^"]*"')
+# Ссылки на строки целиком: 5:5, $5:$12 (итоги по всей строке)
+ROWREF_RE = re.compile(r"(?:(?:'((?:[^']|'')+)'|([A-Za-zА-Яа-яЁё_][\w\.А-Яа-яЁё]*))!)?(?<![\w\.:$])\$?(\d{1,7}):\$?(\d{1,7})(?![\w:.])")
+# Функции, из-за которых связи нельзя прочитать из текста формулы (адрес вычисляется на лету)
+DYNAMIC_RE = re.compile(r"\b(INDIRECT|OFFSET)\s*\(", re.I)
+COLREF_RE = re.compile(r"(?<![\w$])\$?[A-Z]{1,3}:\$?[A-Z]{1,3}(?![\w(])")
+IDENT_RE = re.compile(r"(?<![\w\.!'$])([A-Za-zА-Яа-яЁё_\\][\w\.А-Яа-яЁё]*)(?![\w\.(!'])")
 
 
 @dataclass
@@ -43,6 +49,7 @@ class RowInfo:
     unit: str = ""
     values: dict = field(default_factory=dict)     # col_idx -> cached value (число/строка)
     formulas: dict = field(default_factory=dict)   # col_idx -> формула
+    label_col: int = 0                             # столбец подписи (числа левее — нумерация, не параметры)
 
 
 @dataclass
@@ -55,8 +62,12 @@ class SheetInfo:
     header_row: int | None = None
     years: dict = field(default_factory=dict)       # col_idx -> year
     rows: dict = field(default_factory=dict)        # row -> RowInfo
-    role: str = ""
+    role: str = ""                                  # структурная роль: inputs | calc | report | contents | separator
     headers: dict = field(default_factory=dict)     # row заголовка -> {col: year} (блоков может быть несколько)
+    topic: str = ""                                 # подсказка из названия листа (is, bs, cf, debt, dashboard…) — только для показа
+    orientation: str = "h"                          # h — периоды по столбцам; v — по строкам (не анализируется)
+    dynamic: int = 0                                # формул с INDIRECT/OFFSET/ссылками на столбцы целиком
+    stats: dict = field(default_factory=dict)       # счётчики, по которым определена роль
 
     def years_for(self, row: int) -> dict:
         """Годы по столбцам для строки: ближайший заголовок лет выше строки (или основной)."""
@@ -90,6 +101,10 @@ class WorkbookIndex:
     sheet_edges: dict                # (src_sheet, dst_sheet) -> count
     iterate: bool = False
     build_seconds: float = 0.0
+    names: dict = field(default_factory=dict)       # именованные диапазоны: имя -> [(лист, строка1, строка2)]
+    alt_sets: list = field(default_factory=list)    # наборы листов-близнецов (альтернативные сценарии допущений)
+    inactive: set = field(default_factory=set)      # листы-близнецы, не выбранные текущим сценарием
+    warnings: list = field(default_factory=list)    # что в книге агент видит неполно
 
     # ── удобные методы ──
     def sheet(self, name: str) -> SheetInfo:
@@ -143,31 +158,66 @@ def _detect_headers(raw_rows: dict, cached_rows: dict):
     return main, (headers.get(main) or {}), headers
 
 
-def _sheet_role(name: str) -> str:
+def sheet_topic(name: str) -> str:
+    """Подсказка из названия листа. На логику не влияет: роль листа определяется структурой (structure.py),
+    название — только слабая подсказка при равенстве и подпись в интерфейсе."""
     n = name.lower()
     rules = [
-        (("input",), "inputs"), (("output", "кпки", "summary"), "outputs"),
-        (("dashboard",), "dashboard"), (("assumption", "допущ", "предпос"), "assumptions"),
-        (("contents", "context", "оглав", "содерж"), "contents"),
-        (("is", "p&l", "pl", "опу"), "is"), (("bs", "баланс"), "bs"), (("cf", "ддс"), "cf"),
-        (("debt", "долг", "кредит"), "debt"),
+        (("input", "исходн", "вводн", "параметр", "допущ", "assumption", "предпос", "driver"), "inputs"),
+        (("output", "summary", "итог", "свод", "результ", "dashboard", "дашборд", "kpi", "кпки", "report", "отчет", "отчёт"), "report"),
+        (("contents", "context", "оглав", "содерж", "readme", "cover", "титул"), "contents"),
+        (("is", "p&l", "pl", "pnl", "опу", "опиу"), "is"), (("bs", "баланс"), "bs"), (("cf", "ддс", "cash flow"), "cf"),
+        (("debt", "долг", "кредит", "loan"), "debt"),
     ]
-    for keys, role in rules:
+    for keys, topic in rules:
         for k in keys:
             if (len(k) <= 3 and (n == k or n.startswith(k + " ") or n.startswith(k + "_"))) or (len(k) > 3 and k in n):
-                return role
-    if n.endswith("->") or n.endswith("→"):
-        return "separator"
-    return "calc"
+                return topic
+    return ""
 
 
-def _parse_refs(formula: str, own_sheet: str):
+def _defined_names(wb):
+    """Именованные диапазоны книги: имя (в нижнем регистре) -> [(лист, строка1, строка2)]."""
+    out = {}
+    try:
+        items = list(wb.defined_names.items())
+    except Exception:
+        try:
+            items = [(d.name, d) for d in wb.defined_names.definedName]
+        except Exception:
+            items = []
+    for nm, dn in items:
+        dests = []
+        try:
+            for sheet, coord in dn.destinations:
+                m = re.match(r"^\$?[A-Z]{1,3}\$?(\d+)(?::\$?[A-Z]{1,3}\$?(\d+))?$", (coord or "").replace("$", ""))
+                if sheet and m:
+                    r1 = int(m.group(1))
+                    r2 = int(m.group(2)) if m.group(2) else r1
+                    dests.append((sheet, min(r1, r2), max(r1, r2)))
+        except Exception:
+            pass
+        if dests and not str(nm).startswith("_xlnm"):
+            out[str(nm).lower()] = dests
+    return out
+
+
+def _parse_refs(formula: str, own_sheet: str, names: dict | None = None):
     f = STR_RE.sub('""', formula)
     for m in REF_RE.finditer(f):
         sh = (m.group(1) or m.group(2) or own_sheet).replace("''", "'")
         r1 = int(m.group(4))
         r2 = int(m.group(6)) if m.group(6) else r1
         yield sh, min(r1, r2), max(r1, r2)
+    if ":" in f:
+        for m in ROWREF_RE.finditer(f):                       # ссылки на строки целиком
+            sh = (m.group(1) or m.group(2) or own_sheet).replace("''", "'")
+            r1, r2 = int(m.group(3)), int(m.group(4))
+            yield sh, min(r1, r2), max(r1, r2)
+    if names:                                                 # именованные диапазоны: =Выручка*СтавкаНалога
+        for m in IDENT_RE.finditer(f):
+            for sh, r1, r2 in names.get(m.group(1).lower(), ()):
+                yield sh, r1, r2
 
 
 def build_index(path: str, cache_dir: str | None = None, progress=None) -> WorkbookIndex:
@@ -189,6 +239,7 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
     say("Читаю формулы…")
     wb_f = openpyxl.load_workbook(path, read_only=True, data_only=False)
     raw = {}
+    read_warnings = []
     for ws in wb_f.worksheets:
         rows = {}
         try:
@@ -198,14 +249,15 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                     if v is None:
                         continue
                     rows.setdefault(c.row, {})[c.column] = v
-        except Exception:  # битые data validation и т.п. — пропускаем лист частично
-            pass
+        except Exception as exc:
+            read_warnings.append(f"Лист «{ws.title}»: формулы прочитаны не полностью ({type(exc).__name__}); карта может быть неполной.")
         raw[ws.title] = rows
     iterate = False
     try:
         iterate = bool(wb_f.calculation.iterate)
     except Exception:
         pass
+    defnames = _defined_names(wb_f)
     wb_f.close()
 
     say("Читаю значения…")
@@ -220,8 +272,8 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                     if v is None:
                         continue
                     rows.setdefault(c.row, {})[c.column] = v
-        except Exception:
-            pass
+        except Exception as exc:
+            read_warnings.append(f"Лист «{ws.title}»: значения прочитаны не полностью ({type(exc).__name__}); результаты анализа могут быть неполными.")
         cached[ws.title] = rows
     wb_v.close()
 
@@ -229,8 +281,9 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
     sheets = {}
     precedents = defaultdict(set)
     sheet_edges = defaultdict(int)
+    truncated_ranges = 0
     for name, rows in raw.items():
-        si = SheetInfo(name=name, role=_sheet_role(name))
+        si = SheetInfo(name=name, role="calc", topic=sheet_topic(name))
         crow = cached.get(name, {})
         si.header_row, si.years, si.headers = _detect_headers(rows, crow)
         first_year_col = min(si.years) if si.years else LABEL_COLS + 1
@@ -247,6 +300,7 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
         for r, cells in rows.items():
             ri = RowInfo(row=r)
             labels = []
+            seen_value = False
             for c in sorted(cells):
                 v = cells[c]
                 si.max_col = max(si.max_col, c)
@@ -254,8 +308,11 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                 if is_f:
                     si.n_formulas += 1
                     ri.formulas[c] = v
-                    for sh, r1, r2 in _parse_refs(v, name):
+                    if DYNAMIC_RE.search(v) or COLREF_RE.search(STR_RE.sub('""', v)):
+                        si.dynamic += 1
+                    for sh, r1, r2 in _parse_refs(v, name, defnames):
                         if r2 - r1 > MAX_RANGE_ROWS:
+                            truncated_ranges += 1
                             r2 = r1 + MAX_RANGE_ROWS
                         for rr in range(r1, r2 + 1):
                             if (sh, rr) != (name, r):
@@ -267,10 +324,14 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
                 cv = crow.get(r, {}).get(c, None if is_f else v)
                 if cv is not None:
                     ri.values[c] = cv
-                if c <= label_limit:
+                if not si.years and (is_f or (isinstance(cv, (int, float)) and not isinstance(cv, bool))) and labels:
+                    seen_value = True                       # лист без шапки лет: текст правее значения — комментарий, не подпись
+                if c <= label_limit and not seen_value:
                     txt = cv if isinstance(cv, str) else (v if isinstance(v, str) and not is_f else None)
                     if isinstance(txt, str) and txt.strip() and not _as_year(txt):
                         labels.append(txt.strip())
+                        if not ri.label_col:
+                            ri.label_col = c
             units = [l for l in labels if len(l) <= 22 and UNIT_RE.search(l)]
             names = [l for l in labels if l not in units and not l.isdigit()]
             nm = crow.get(r, {}).get(name_col) if name_col else None
@@ -289,7 +350,13 @@ def build_index(path: str, cache_dir: str | None = None, progress=None) -> Workb
             dependents[p].add(k)
 
     idx = WorkbookIndex(path=path, file_hash=fh, sheets=sheets, precedents=dict(precedents),
-                        dependents=dict(dependents), sheet_edges=dict(sheet_edges), iterate=iterate)
+                        dependents=dict(dependents), sheet_edges=dict(sheet_edges), iterate=iterate, names=defnames)
+    say("Определяю структуру книги: роли листов, наборы сценариев…")
+    from .structure import analyze
+    analyze(idx, raw, cached)
+    idx.warnings.extend(read_warnings)
+    if truncated_ranges:
+        idx.warnings.append(f"{truncated_ranges} ссылок на длинные диапазоны частично включены в граф зависимостей; карта может быть неполной.")
     idx.build_seconds = round(time.time() - t0, 1)
     if cache_dir:
         with open(cpath, "wb") as f:

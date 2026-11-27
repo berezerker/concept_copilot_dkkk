@@ -18,6 +18,12 @@ import subprocess
 import sys
 import threading
 
+from .transaction import RestorationError, same_values, split_ref, validate_overrides
+
+# Все сессии на Mac используют один процесс Excel. Сценарий и откат не должны
+# перемежаться с чтением/записью другой сессии даже при разных worker-потоках.
+_EXCEL_LOCK = threading.RLock()
+
 
 class EngineUnavailable(RuntimeError):
     pass
@@ -224,7 +230,7 @@ def _as_lit(v, formula=False):
             return '""'
         if isinstance(v, int) or float(v).is_integer() and abs(v) < 1e15:
             return str(int(v))
-        return f"{float(v):.15E}"                       # 1.234000000000000E-07 — формат, который понимает AppleScript
+        return f"{float(v):.16E}"                       # 17 значащих цифр для round-trip double
     s = str(v).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{s}"'
 
@@ -277,7 +283,8 @@ class ExcelEngine(CalcEngine):
             if fn is None:
                 break
             try:
-                done["result"] = fn(*args)
+                with _EXCEL_LOCK:
+                    done["result"] = fn(*args)
             except Exception as e:
                 done["error"] = e
             done["event"].set()
@@ -361,10 +368,12 @@ class ExcelEngine(CalcEngine):
             self.iteration_on = None
 
     def _rng(self, ref):
-        sheet, addr = ref.rsplit("!", 1)
-        return self.wb.sheets[sheet.strip("'").replace("''", "'")].range(addr.replace("$", ""))
+        sheet, addr = split_ref(ref)
+        return self.wb.sheets[sheet].range(addr)
 
     def _read(self, refs):
+        if getattr(self, "_tainted", False):
+            raise RestorationError("Восстановление книги не подтверждено. Загрузите модель заново.")
         if getattr(self, "_dirty", None):          # после сценария формулы восстановлены, но ещё не пересчитаны
             watch, self._dirty = self._dirty, None
             self._converge(watch)
@@ -435,7 +444,7 @@ class ExcelEngine(CalcEngine):
             prev = cur
             if not self.iterate and k >= int(os.environ.get("CF_CALC_PASSES", "1")):
                 return k
-        return max_iter
+        raise RuntimeError(f"Excel не достиг сходимости за {max_iter} итераций")
 
     def _open_mac(self, path):
         """Excel для Mac. Важно: на время открытия диалоги ВКЛЮЧЕНЫ. Excel в песочнице спрашивает доступ к файлу
@@ -507,6 +516,8 @@ class ExcelEngine(CalcEngine):
         self._quiet_app()
         self._hide()
         self._calc()
+        self._tainted = False
+        self._formula_cache, self._box_cache, self._dirty = {}, {}, None
         return {"iterate": iterate}
 
     def _coalesce(self, overrides):
@@ -563,105 +574,165 @@ class ExcelEngine(CalcEngine):
 
     def _scenario(self, overrides, watch, reads):
         import time
-        if not hasattr(self, "_box_cache"):
-            self._box_cache = {}
-        if platform.system() == "Darwin":
-            overrides = self._coalesce(overrides)
+        if getattr(self, "_tainted", False):
+            raise RestorationError("Восстановление книги не подтверждено. Загрузите модель заново.")
+        self.last_transaction = {"status": "preflight", "restored": False}
+        preflight = validate_overrides(overrides)
+        # Свежий снимок: Excel может быть изменён пользователем между сценариями.
+        self._box_cache = {}
+        if platform.system() == "Darwin" and all("expected_input" not in o for o in overrides):
+            merged = self._coalesce(overrides)
+            try:
+                validate_overrides(merged)
+            except ValueError:
+                pass  # расширенные блоки могут перекрыть другие полосы; исходные уже проверены
+            else:
+                overrides = merged
+        watch = list(dict.fromkeys(list(watch) + list(reads)))
+        self._converge(watch)
+        baseline = self._read_raw(watch)
         saved = []
         self._dirty = None
         T = {"save": 0.0, "write": 0.0, "calc": 0.0, "read": 0.0, "restore": 0.0}
         batch = platform.system() == "Darwin" and os.environ.get("CF_MAC_BATCH", "1") == "1" and overrides \
             and not getattr(self, "_batch_broken", False)
+        t = time.time()
+        for o in overrides:
+            r = self._rng(o["ref"])
+            f = r.options(ndim=2).formula
+            pure = all(not (isinstance(x, str) and x.startswith("=")) for row in f for x in row)
+            original = r.options(ndim=2).value if pure else None
+            if "expected_input" in o and (not pure or not same_values(original, o["expected_input"], tol=0)):
+                raise ValueError(f"{o['ref']}: допущение изменилось или стало формулой. Проверьте ячейку заново.")
+            saved.append((o["ref"], r, f, original))
+        # Даты и другие типы передаём через нативный bridge, а не превращаем в строки AppleScript.
         if batch:
-            try:
-                return self._scenario_batch(overrides, watch, reads, T)
-            except Exception as e:                   # запасной путь — по одной записи через xlwings
-                self._batch_broken = True
-                self.batch_error = str(e)[:300]
-                T = {k: 0.0 for k in T}
+            blocks = [o["values"] for o in overrides] + [orig if orig is not None else f for _, _, f, orig in saved]
+            batch = all(v is None or isinstance(v, (str, bool, int, float)) for b in blocks for row in b for v in row)
+        T["save"] = time.time() - t
+        # Все адреса чтения и записи проверены, все снимки сняты ДО первой записи.
+        self.last_transaction = {"status": "running", "preflight": preflight, "restored": False}
         try:
-            for o in overrides:
-                t = time.time()
-                r = self._rng(o["ref"])
-                key = o["ref"]
-                if not hasattr(self, "_formula_cache"):
-                    self._formula_cache = {}
-                if key not in self._formula_cache:     # исходные формулы/значения модели между прогонами не меняются
-                    f = r.options(ndim=2).formula
-                    pure = all(not (isinstance(x, str) and x.startswith("=")) for row in f for x in row)
-                    self._formula_cache[key] = (f, r.options(ndim=2).value if pure else None)
-                f, orig = self._formula_cache[key]
-                saved.append((r, f, orig))
-                T["save"] += time.time() - t
-                t = time.time()
-                r.value = o["values"]
-                T["write"] += time.time() - t
+            t = time.time()
+            if batch:
+                _applescript_batch(self.wb.name, [(*self._split(o["ref"]), "value", o["values"]) for o in overrides])
+                for o, (_, r, _, _) in zip(overrides, saved):
+                    self._ensure_written(o["ref"], r, "value", o["values"], block_written=True)
+            else:
+                for o, (_, r, _, _) in zip(overrides, saved):
+                    self._ensure_written(o["ref"], r, "value", o["values"])
+            T["write"] = time.time() - t
             t = time.time()
             iters = self._converge(watch)
             T["calc"] += time.time() - t
             t = time.time()
             values = self._read_raw(reads)
+            # Ошибка Excel часто возвращается как None: не выдаём её за числовой результат.
+            import math
+            for ref, block in zip(reads, values):
+                before = baseline[watch.index(ref)]
+                for old_row, new_row in zip(before, block):
+                    for old, new in zip(old_row, new_row):
+                        if isinstance(old, (float, int)) and not isinstance(old, bool) and (
+                                not isinstance(new, (float, int)) or isinstance(new, bool) or not math.isfinite(new)):
+                            raise ValueError(f"{ref}: вместо числовой метрики получена ошибка/пустое значение")
             T["read"] += time.time() - t
+            self.last_transaction["status"] = "calculated"
+        except BaseException:
+            self.last_transaction["status"] = "failed"
+            raise
         finally:
             t = time.time()
-            for r, f, orig in saved:           # формулы возвращаются даже при ошибке
-                if orig is not None:
-                    r.value = orig             # чистые допущения — исходными значениями
-                else:
-                    r.formula = f
-            T["restore"] += time.time() - t
-            self._dirty = watch                # пересчёт базы — лениво, при следующем чтении
+            try:
+                self._restore_transaction(saved, watch, baseline, batch)
+                self.last_transaction["restored"] = True
+            except Exception as e:
+                self._tainted = True
+                self.last_transaction.update(status="restore_failed", error=str(e))
+                raise RestorationError("Не удалось подтвердить восстановление Excel; дальнейшие расчёты заблокированы. " + str(e)) from e
+            finally:
+                T["restore"] = time.time() - t
+                self.last_timing = {k: round(v, 2) for k, v in T.items()}
+                self._box_cache, self._formula_cache = {}, {}
+                self._dirty = None
+        self.last_transaction["status"] = "verified"
         self.last_timing = {k: round(v, 2) for k, v in T.items()}
         return values, iters
+
+    def _restore_transaction(self, saved, watch, baseline, batch):
+        restored_batch = False
+        if batch and saved:
+            try:
+                _applescript_batch(self.wb.name, [(*self._split(ref), "value" if orig is not None else "formula",
+                                                orig if orig is not None else f) for ref, _, f, orig in saved])
+                restored_batch = True
+            except Exception:
+                self._batch_broken = True
+        errors = []
+        restored_refs = set()
+        if not restored_batch:
+            for ref, r, f, orig in saved:
+                try:
+                    if orig is not None:
+                        r.value = orig
+                    else:
+                        r.formula = f
+                    restored_refs.add(ref)
+                except Exception:
+                    pass  # точный повтор и итоговая ошибка — ниже; остальные блоки всё равно восстанавливаем
+        # Проверяем каждый диапазон, даже если восстановление другого не удалось.
+        for ref, r, f, orig in saved:
+            try:
+                self._ensure_written(ref, r, "value" if orig is not None else "formula",
+                                     orig if orig is not None else f,
+                                     block_written=restored_batch or ref in restored_refs)
+            except Exception as e:
+                errors.append(f"{ref}: {e}")
+        if errors:
+            raise RestorationError("; ".join(errors)[:1000])
+        self._converge(watch)
+        if not same_values(self._read_raw(watch), baseline):
+            raise RestorationError("Контрольные показатели после отката отличаются от базы")
+
+    def _ensure_written(self, ref, rng, kind, expected, block_written=False):
+        """Записать матрицу и подтвердить точное значение.
+
+        Excel for Mac иногда принимает многорядную запись без ошибки, но раскладывает
+        элементы по диапазону неверно. После обычной/пакетной записи проверяем диапазон,
+        затем деградируем до строк и, если нужно, до отдельных ячеек.
+        """
+        from openpyxl.utils.cell import get_column_letter, range_boundaries
+
+        prop = "value" if kind == "value" else "formula"
+
+        def read(target):
+            return getattr(target.options(ndim=2), prop)
+
+        def write(target, values):
+            setattr(target, prop, values)
+
+        if not block_written:
+            write(rng, expected)
+        if same_values(read(rng), expected, tol=0):
+            return
+
+        sheet, addr = self._split(ref)
+        c1, r1, c2, r2 = range_boundaries(addr)
+        for offset, row in enumerate(expected):
+            row_ref = f"'{sheet.replace(chr(39), chr(39) * 2)}'!{get_column_letter(c1)}{r1 + offset}:{get_column_letter(c2)}{r1 + offset}"
+            write(self._rng(row_ref), [row])
+        if same_values(read(rng), expected, tol=0):
+            return
+
+        for i, row in enumerate(expected):
+            for j, value in enumerate(row):
+                cell_ref = f"'{sheet.replace(chr(39), chr(39) * 2)}'!{get_column_letter(c1 + j)}{r1 + i}"
+                write(self._rng(cell_ref), [[value]])
+        if not same_values(read(rng), expected, tol=0):
+            raise RuntimeError(f"{ref}: значения/формулы не записаны точно")
 
     def _split(self, ref):
-        sheet, addr = ref.rsplit("!", 1)
-        return sheet.strip("'").replace("''", "'"), addr.replace("$", "")
-
-    def _scenario_batch(self, overrides, watch, reads, T):
-        import time
-        t = time.time()
-        ops, rest = [], []
-        if not hasattr(self, "_formula_cache"):
-            self._formula_cache = {}
-        for o in overrides:
-            key = o["ref"]
-            if key not in self._formula_cache:
-                r = self._rng(key)
-                f = r.options(ndim=2).formula
-                pure = all(not (isinstance(x, str) and x.startswith("=")) for row in f for x in row)
-                self._formula_cache[key] = (f, r.options(ndim=2).value if pure else None)
-            f, orig = self._formula_cache[key]
-            sh, addr = self._split(key)
-            ops.append((sh, addr, "value", o["values"]))
-            rest.append((sh, addr, "value", orig) if orig is not None else (sh, addr, "formula", f))
-        T["save"] += time.time() - t
-        t = time.time()
-        _applescript_batch(self.wb.name, ops)
-        T["write"] += time.time() - t
-        try:
-            t = time.time()
-            iters = self._converge(watch)
-            T["calc"] += time.time() - t
-            t = time.time()
-            values = self._read_raw(reads)
-            T["read"] += time.time() - t
-        finally:
-            t = time.time()
-            try:
-                _applescript_batch(self.wb.name, rest)
-            except Exception:
-                for sh, addr, kind, v in rest:      # откат обязан пройти
-                    rng = self.wb.sheets[sh].range(addr)
-                    if kind == "formula":
-                        rng.formula = v
-                    else:
-                        rng.value = v
-            T["restore"] += time.time() - t
-            self._dirty = watch
-        self.last_timing = {k: round(v, 2) for k, v in T.items()}
-        self.last_timing["batch"] = len(ops)
-        return values, iters
+        return split_ref(ref)
 
     def _close(self):
         try:
@@ -703,6 +774,8 @@ class ExcelEngine(CalcEngine):
         try:
             return self._submit(fn, *args)
         except Exception as e:
+            if isinstance(e, RestorationError):
+                raise
             if not getattr(self, "_path", None) or not self._lost(e):
                 raise
             self._submit(self._reconnect)
