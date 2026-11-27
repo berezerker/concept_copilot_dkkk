@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -12,6 +13,7 @@ from app.agent.session import Session
 from app.agent.tools import t_find_parameters, t_get_model_manifest, t_resolve_target
 from app.agent.tools_probe import inspect_cell_stress
 from app.server import SESSIONS, app
+from app.workbook.manifest import parameter_id
 from tests.foreign_model import make_foreign
 
 
@@ -66,6 +68,25 @@ def test_parameter_bindings():
             assert resolve(different, phrase)["selected"]["id"] == old["id"]
             assert client.post(route, json={**data, "parameter_id": None}).status_code == 200
             assert resolve(restored, phrase)["selected"]["id"] == old["id"]
+
+            # Сценарий и новое исправление могут прийти из разных сессий той же книги.
+            binding = {**data, "query": "Допущение для проверки", "parameter_id": parameter_id("База", 2)}
+            assert client.post(route, json=binding).status_code == 200
+            restored.engine = Mock()
+            restored.engine.name = "excel"
+            restored.engine._tainted = False
+            restored.engine.read.return_value = [[[123.0]], [[456.0]]]
+            restored.engine_open = True
+            scenario_url = f"/api/excel-scenarios/{restored.id}"
+            request = {"shocks": [{"parameter": binding["query"], "source_period": "2026", "pct": -10}],
+                       "metrics": [{"target": "'Расчёт'!D7"}]}
+            plan = client.post(scenario_url + "/prepare", json=request)
+            assert plan.status_code == 200, plan.json()
+            assert plan.json()["inputs"][0]["source"] == "'База'!E2"
+            assert client.post(route, json={**binding, "parameter_id": parameter_id("База", 3)}).status_code == 200
+            result = client.post(scenario_url + "/execute", json={"plan_id": plan.json()["plan_id"]})
+            assert result.status_code == 400 and "привязка изменились" in result.json()["detail"]
+            restored.engine.scenario.assert_not_called()
         finally:
             for session in sessions:
                 SESSIONS.pop(session.id, None)

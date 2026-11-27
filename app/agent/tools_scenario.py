@@ -84,7 +84,7 @@ def prepare_excel_scenario(s, args, emit):
     plans = s.scenario_plans
     if len(plans) >= LIMIT:
         del plans[next(iter(plans))]
-    plans[plan["plan_id"]] = (deepcopy(plan), deepcopy(metrics), refs, baseline, overrides)
+    plans[plan["plan_id"]] = (deepcopy(plan), deepcopy(metrics), deepcopy(shocks), refs, baseline, overrides)
     emit("progress", {"text": "Предпроверка Excel завершена. Адреса и исходные значения зафиксированы."})
     return plan
 
@@ -95,12 +95,14 @@ def execute_excel_scenario(s, args, emit):
     saved = s.scenario_plans.get(args.get("plan_id"))
     if not saved:
         raise ValueError("План сценария отсутствует или устарел. Подготовьте его заново.")
-    plan, selectors, refs, baseline, overrides = saved
-    current_targets = [cells.ref_for(_target(s, item)[0]) for item in selectors]
-    if plan["file_hash"] != s.idx.file_hash or current_targets != [m["target"] for m in plan["metrics"]]:
+    plan, metric_selectors, input_selectors, refs, baseline, overrides = saved
+    if plan["file_hash"] != s.idx.file_hash:
+        raise ValueError("Книга изменилась. Подготовьте сценарий заново.")
+    current_targets = [cells.ref_for(_target(s, item)[0]) for item in metric_selectors]
+    current_sources = [_scenario_input(s, item)[1]["source"] for item in input_selectors]
+    if (current_targets != [m["target"] for m in plan["metrics"]]
+            or current_sources != [item["source"] for item in plan["inputs"]]):
         raise ValueError("Книга или привязка изменились. Подготовьте сценарий заново.")
-    for item in plan["inputs"]:
-        resolve_input(s, {"source": item["source"], "pct": item["requested_pct"]})
 
     def recalc(changes):
         values, iterations = s.engine.scenario(changes, refs, refs, expected_watch=baseline)
