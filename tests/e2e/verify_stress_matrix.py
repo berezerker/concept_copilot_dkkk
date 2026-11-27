@@ -38,7 +38,9 @@ def _verified_plan(session, payload, parameter_shocks):
 
         before_prepare = session.engine.n_scen
         exact = post("prepare", payload)
-        preview = post("prepare", {**payload, "shocks": parameter_shocks})
+        outputs = [{**selector, "target": result["target"]}
+                   for selector, result in zip(payload["metrics"], exact["metrics"])]
+        preview = post("prepare", {"shocks": parameter_shocks, "metrics": outputs})
         assert session.engine.n_scen == before_prepare, "Предпроверка запустила сценарий"
         assert preview["metrics"] == exact["metrics"]
         assert [item["parameter_id"] for item in preview["inputs"]] == [
