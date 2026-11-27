@@ -641,6 +641,7 @@ class ScenarioShockIn(BaseModel):
 class ScenarioMetricIn(BaseModel):
     target: str | None = None
     metric: str | None = None
+    concept: str | None = None
     period: str | None = None
 
 

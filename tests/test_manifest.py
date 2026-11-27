@@ -26,6 +26,8 @@ def check_scenario_parameter(s):
     args = {"parameter": mf.parameter_id("База", 2), "source_period": "2026", "pct": -10}
     _, detail = _scenario_input(s, args)
     assert detail["source"] == "'База'!E2" and detail["parameter_id"] == args["parameter"]
+    _, by_row = _scenario_input(s, {"source": "'База'!2", "source_period": "2026", "pct": -10})
+    assert by_row["source"] == detail["source"]
     check = TestCase()
     with check.assertRaisesRegex(ValueError, "точный период входа"):
         _scenario_input(s, {**args, "source_period": None})
@@ -41,6 +43,8 @@ def check_scenario_parameter(s):
     node, entry = _target(s, output)
     ref = ref_for(node)
     assert _target(s, {**output, "target": ref}) == (node, entry)
+    assert _target(s, {**output, "target": f"'{node[0]}'!{node[1]}"}) == (node, entry)
+    assert _target(s, {"concept": "ebitda", "period": "2026"}) == (node, entry)
     with check.assertRaisesRegex(ValueError, "не соответствует периоду"):
         _target(s, {**output, "target": ref, "period": "2027"})
     with check.assertRaisesRegex(ValueError, "не соответствует привязке"):

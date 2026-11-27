@@ -43,6 +43,41 @@ def cell(idx, ref):
     return node
 
 
+def row_reference(idx, ref):
+    """Разобрать строку в формате паспорта «лист!номер строки»."""
+    if "!" not in ref:
+        return None
+    sheet, coord = split_ref(ref)
+    if not re.fullmatch(r"[1-9][0-9]{0,6}", coord):
+        return None
+    sh = idx.sheet(sheet)
+    row = int(coord)
+    if row > 1048576 or row not in sh.rows:
+        raise ValueError(f"Строка {ref} не найдена в индексе книги")
+    return sh.name, row
+
+
+def cell_for_period(idx, location, period, *, input_only=False):
+    """Выбрать единственную подходящую ячейку строки за точный период."""
+    sheet, row = location
+    sh = idx.sheet(sheet)
+    info = idx.row(sheet, row)
+    matching = []
+    for col, value in sh.years_for(row).items():
+        if value != period:
+            continue
+        if col in info.formulas:
+            if not input_only:
+                matching.append(col)
+        elif numeric(info.values.get(col)):
+            matching.append(col)
+    if len(matching) != 1:
+        kind = "с введённым числом" if input_only else "результата"
+        raise ValueError(f"{sheet}!{row}: в периоде {period} нет единственной ячейки {kind}. "
+                         "Укажите точный адрес A1.")
+    return sh.name, row, matching[0]
+
+
 def ref_for(node):
     sheet, row, col = node
     return f"{quote_sheetname(sheet)}!{get_column_letter(col)}{row}"
