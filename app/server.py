@@ -505,6 +505,44 @@ def model_manifest(session_id: str):
         return s.refresh_manifest() or mf.build(s)
 
 
+@app.get("/api/manifest/{session_id}/parameters/{parameter_id}")
+def model_parameter(session_id: str, parameter_id: str):
+    from .workbook.cell_trace import numeric, period_at, ref_for
+
+    s = _session(session_id)
+    with s.lock:
+        manifest = s.manifest or s.refresh_manifest()
+        parameter = next((p for p in manifest["parameters"] if p["id"] == parameter_id), None)
+        if parameter is None:
+            raise HTTPException(404, "Параметр не найден в паспорте этой книги")
+        loc = parameter["location"]
+        sheet, row = loc["sheet"], loc["row"]
+        ri = s.idx.row(sheet, row)
+        refs = []
+        for col, value in sorted(ri.values.items()):
+            if col <= ri.label_col or col in ri.formulas or not numeric(value):
+                continue
+            node = (sheet, row, col)
+            period = period_at(s.idx, node)
+            refs.append({"ref": ref_for(node), "period": str(period) if period is not None else None,
+                         "value": value})
+        uses = sorted(s.idx.dependents.get((sheet, row), ()))
+        observed = []
+        parameter_refs = {cell["ref"] for cell in refs}
+        for key, history in reversed(s.verified_scenarios.items()):
+            trials = history["individual"]
+            if len(history["inputs"]) == 1:
+                trials = [history["combined"]]
+            for trial in trials:
+                if len(trial["inputs"]) == 1 and trial["inputs"][0]["ref"] in parameter_refs:
+                    observed.append({"plan_id": key, "verified_at": history["verified_at"],
+                                     "source": trial["inputs"][0], "metrics": trial["metrics"]})
+        return {"parameter": parameter, "inputs": refs[:80], "input_count": len(refs),
+                "used_by": [{"sheet": name, "row": r, "label": s.idx.sheets[name].rows[r].label}
+                            for name, r in uses[:10] if name in s.idx.sheets and r in s.idx.sheets[name].rows],
+                "measured": observed[:10]}
+
+
 class BindingIn(BaseModel):
     concept: str
     sheet: str

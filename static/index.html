@@ -75,6 +75,21 @@
   table.t td.n{font-family:var(--mono);text-align:right;white-space:nowrap;font-size:11.5px}
   .chart{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#fff;overflow-x:auto}
   .chart h4{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .scenario-builder,.model-explorer,.model-intro{padding:16px;display:grid;gap:14px}
+  .scenario-builder h3,.model-explorer h3,.model-intro h3{font-size:15px;margin-bottom:5px}
+  .scenario-builder fieldset{border:1px solid var(--border);border-radius:10px;padding:10px 12px;min-width:0}
+  .scenario-builder legend{font-size:12px;font-weight:600;padding:0 5px}
+  .scenario-row,.scenario-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+  .scenario-row{padding:7px 0;border-bottom:1px solid var(--border)}
+  .scenario-row:last-child{border-bottom:0}
+  .scenario-row label{display:grid;gap:4px;color:var(--muted);font-size:12px;min-width:0}
+  .scenario-builder input:not([type=checkbox]),.scenario-builder select,.model-explorer input,.model-explorer select{border:1px solid var(--border);border-radius:6px;padding:6px 8px;font:inherit;color:var(--text);max-width:100%;min-width:0}
+  .scenario-builder input[type=number]{width:6em}
+  .scenario-candidates{width:100%;display:flex;flex-wrap:wrap;gap:6px;overflow-wrap:anywhere}
+  .scenario-builder code,.scenario-builder dd{overflow-wrap:anywhere;white-space:normal}
+  .scenario-results{overflow-x:auto}
+  .scenario-results .combined{background:#ebf6ef}
+  .scenario-results td small{display:block;color:var(--muted);font-size:11px}
   .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--muted);margin-top:4px}
   .legend i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
   .answer{border:1px solid #cfe0c9;background:linear-gradient(180deg,#fbfef9,#fff);border-radius:12px;padding:14px 16px;line-height:1.6}
@@ -232,7 +247,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const chat = $('#chat'), wrap = $('#wrap');
-let SID = null, running = false, DEFAULTS = null;
+let SID = null, running = false, DEFAULTS = null, workbookView = 0;
 function saveBlob(b, name){ const u=URL.createObjectURL(b); const x=document.createElement('a'); x.href=u; x.download=name; x.click(); setTimeout(()=>URL.revokeObjectURL(u),3000); }
 const COLORS = ['#1c2733','#1665d8','#e8940a','#d4382f','#7b5cd6','#1fa356','#0aa2b5','#b0518f'];
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -295,10 +310,11 @@ fileIn.onchange = () => fileIn.files[0] && upload(fileIn.files[0]);
 async function afterUpload(r, box){
     const d = await r.json();
     if(!r.ok) throw new Error(d.detail || r.statusText);
-    SID = d.session_id; box.remove();
+    SID = d.session_id; workbookView++; box.remove();
+    for(const panel of document.querySelectorAll('.scenario-builder,.model-explorer,.model-intro')) panel.remove();
     $('#eng').textContent = 'движок: ' + (d.engine || 'нет — только чтение');
     renderCard(d);
-    add(el(`<div class="sys">✓ Экспресс-анализ «${esc(d.card.file)}» готов за ${d.seconds} с: ${d.card.sheets_total} листов, ${d.card.formulas_total.toLocaleString('ru-RU')} формул. Карточка модели — слева; агент опирается на неё во всех ответах.${d.engine?'':'<br><b>Пересчёт недоступен:</b> '+esc(d.engine_error||'')}</div>`));
+    showModelIntro(d);
     chipsRender();
     $('#send').disabled = false;
     ['#btnMap','#btnAudit','#btnParams','#btnDeps','#btnExpert','#btnKpki'].forEach(b=>$(b).disabled=false);
@@ -540,6 +556,412 @@ function openCellStress(){
     finally{ running=false; $('#send').disabled=false; }
   };
 }
+
+const scenarioNumber = x => typeof x==='number'
+  ? x.toLocaleString('ru-RU',{maximumSignificantDigits:9})
+  : '—';
+
+function scenarioPreview(data){
+  const inputs=data.inputs.map(x=>`<tr><td>${esc(x.source_label)}<br><code>${esc(x.source)}</code></td>
+    <td>${esc(x.source_period||'—')}</td><td class="n">${scenarioNumber(x.before)} → ${scenarioNumber(x.proposed)} ${esc(x.source_unit||'')}</td>
+    <td class="n">${scenarioNumber(x.requested_pct)} %</td></tr>`).join('');
+  const outputs=data.metrics.map(x=>`<tr><td>${esc(x.target_label)}<br><code>${esc(x.target)}</code>
+    ${x.binding_confirmed===false?'<small>Привязка предложена паспортом</small>':''}</td>
+    <td>${esc(x.period||'—')}</td><td class="n">${scenarioNumber(x.before)} ${esc(x.target_unit||'')}</td></tr>`).join('');
+  const paths=data.inputs.map(x=>`<details><summary>${esc(x.source_label||x.source)} · ${esc(x.source)}</summary>
+    ${x.paths.map(path=>`<p><b>${esc(path.target)}</b><br>
+      ${path.status==='found'?'<code>'+path.path.map(esc).join(' → ')+'</code>':'Явная цепочка формул не найдена.'}
+      ${path.limitations.length?'<br>'+path.limitations.map(k=>esc(traceIssues[k]||k)).join(' · '):''}</p>`).join('')}</details>`).join('');
+  return `<div class="scenario-results"><h3>План Excel</h3>
+    <table class="t"><caption>Изменяемые входы</caption><thead><tr><th>Вход</th><th>Период</th>
+      <th>База → план</th><th>Шок</th></tr></thead><tbody>${inputs}</tbody></table>
+    <table class="t"><caption>Контрольные результаты</caption><thead><tr><th>Показатель</th><th>Период</th>
+      <th>База</th></tr></thead><tbody>${outputs}</tbody></table>
+    ${data.experiment_reason?'<p class="kv">Пробный пересчёт: '+esc(data.experiment_reason)+'</p>':''}
+    <h4>Возможные связи по формулам</h4>${paths}</div>`;
+}
+
+function scenarioOutcome(data){
+  const labels=new Map(data.inputs.map(i=>[i.source,i.source_label||i.source]));
+  function row(name, detail, combined=false){
+    const byRef=new Map(detail.metrics.map(m=>[m.ref,m]));
+    return `<tr${combined?' class="combined"':''}><th scope="row">${name}</th>${data.metrics.map(m=>{
+      const v=byRef.get(m.target);
+      return `<td class="n">${scenarioNumber(v?.after)}
+        <small>${v?'Δ '+scenarioNumber(v.delta):''}</small></td>`;
+    }).join('')}</tr>`;
+  }
+  const base=`<tr><th scope="row">База</th>${data.metrics.map(m=>`<td class="n">${scenarioNumber(m.before)}</td>`).join('')}</tr>`;
+  const comparisons=data.individual.map(item=>{
+    const ref=item.inputs[0].ref;
+    return row(esc(labels.get(ref))+'<br><code>'+esc(ref)+'</code>', item);
+  }).join('');
+  const applied=data.combined.inputs.map(x=>`<li><code>${esc(x.ref)}</code> → ${scenarioNumber(x.after)}
+    (${scenarioNumber(x.achieved_pct)} %)</li>`).join('');
+  return `<div class="scenario-results"><h3>Результаты Excel</h3>
+    <p class="kv">${data.historical?'Сохранённый результат. Текущая база не сверялась. ':''}
+      ${data.rollback_verified?'Откат подтверждён после каждого пересчёта.':''}</p>
+    <table class="t"><caption>Отдельные и совместный эффекты. Δ — изменение от базы.</caption>
+      <thead><tr><th scope="col">Сценарий</th>${data.metrics.map(m=>`<th scope="col">${esc(m.target_label||'Результат')}
+        ${m.period?' · '+esc(m.period):''} ${esc(m.target_unit||'')}<br><code>${esc(m.target)}</code></th>`).join('')}</tr></thead>
+      <tbody>${base}${comparisons}${row('Совместный стресс',data.combined,true)}</tbody></table>
+    <details><summary>Фактически применённые изменения</summary><ul>${applied}</ul></details></div>`;
+}
+
+function showModelIntro(d){
+  const m=d.manifest;
+  const box=add(el(`<section class="chart model-intro">
+    <header><h3>${esc(d.card.file)}</h3>
+      <p class="kv">${esc(d.semantics?.industry_name||'Отрасль не определена')} ·
+        ${d.card.sheets_total} листов · прогноз по умолчанию с ${esc(d.card.forecast_start??'—')}</p></header>
+    <p class="kv">В паспорте ${m.counts.metrics} показателей и ${m.counts.parameters} параметров.
+      ${m.counts.limitations?'Ограничений карты: '+m.counts.limitations+'.':''}
+      ${d.engine?'':('Пересчёт недоступен. '+esc(d.engine_error||''))}</p>
+    <div class="scenario-actions">
+      <button type="button" class="btn" data-model>Открыть обзор модели</button>
+      <button type="button" class="btn" data-edit>Проверить привязки</button>
+      <button type="button" class="btn" data-stress>Открыть совместный стресс</button>
+    </div></section>`));
+  box.querySelector('[data-model]').onclick=openModelExplorer;
+  box.querySelector('[data-edit]').onclick=openBindingReview;
+  box.querySelector('[data-stress]').onclick=()=>openScenarioBuilder();
+}
+
+async function openModelExplorer(){
+  if(!SID || running) return;
+  const existing=$('.model-explorer');
+  if(existing){ existing.scrollIntoView({block:'nearest'}); return; }
+  const sid=SID, view=workbookView;
+  const current=()=>sid===SID && view===workbookView;
+  const panel=add(el(`<section class="chart model-explorer"><div class="scenario-actions">
+    <h3>Обзор модели</h3><button type="button" class="btn" data-close>Закрыть обзор</button></div>
+    <p class="kv" role="status">Читаю паспорт…</p><div data-explorer></div></section>`));
+  const find=s=>panel.querySelector(s);
+  find('[data-close]').onclick=()=>panel.remove();
+  const status=find('[role=status]');
+  try{
+    const m=await workbookRequest('/api/manifest/'+sid);
+    if(!current() || !panel.isConnected) return;
+    status.textContent=m.model.file;
+    const root=find('[data-explorer]');
+    const sets=(m.scenario_sets||[]).map(s=>`<li>${s.sheets.map(esc).join(', ')}
+      · выбран ${s.active.map(esc).join(', ')} · ${s.verified?'проверено пересчётом':'требует проверки'}</li>`).join('');
+    const switches=(m.switches||[]).map(s=>`<li>${esc(s.label||'Переключатель')} <code>${esc(s.sheet)}!${esc(s.row)}</code></li>`).join('');
+    root.innerHTML=`<details><summary>Структура и сценарии</summary>
+      <p class="kv">${m.zones.length} зон · ${m.edges.length} связей между листами</p>
+      ${sets?'<ul>'+sets+'</ul>':'<p class="kv">Отдельные наборы допущений не найдены.</p>'}
+      ${switches?'<p class="kv">Предполагаемые переключатели</p><ul>'+switches+'</ul>':''}</details>
+      <details><summary>Показатели и привязки</summary>
+      <div class="scenario-actions" data-metrics></div>
+      <p><button type="button" class="btn" data-bindings>Проверить привязки</button></p></details>
+      <details><summary>Что требует проверки</summary>
+      <ul>${m.limitations.map(x=>'<li>'+esc(x.message)+'</li>').join('')}</ul>
+      <ul>${m.metrics.filter(x=>!x.binding_confirmed && (x.status==='review' || x.alternatives.length)).map(x=>
+        '<li>'+esc(x.name)+' · '+esc(x.location.reported)+(x.alternatives.length?' · альтернативы: '+x.alternatives.map(esc).join(', '):'')+'</li>').join('')}</ul>
+      </details>
+      <h4>Параметры модели</h4>
+      <div class="scenario-actions">
+        <label>Поиск <input data-query placeholder="Название, блок или лист"></label>
+        <label>Фактор <select data-factor><option value="">Все</option></select></label>
+        <label>Блок <select data-block><option value="">Все</option></select></label>
+      </div>
+      <p data-count class="kv" aria-live="polite"></p><div class="scenario-actions" data-parameters></div>
+      <div data-parameter aria-live="polite"></div>`;
+    find('[data-bindings]').onclick=openBindingReview;
+    const metrics=find('[data-metrics]');
+    for(const item of m.metrics.filter(x=>x.periods.length)){
+      const button=el('<button type="button" class="btn"></button>');
+      button.textContent=item.name+' · '+item.location.reported;
+      button.title='Найти входы и проверить связи с этим показателем';
+      button.onclick=()=>openScenarioBuilder({metric:item.id});
+      metrics.append(button);
+    }
+    const query=find('[data-query]'), factor=find('[data-factor]'), block=find('[data-block]');
+    const list=find('[data-parameters]'), detail=find('[data-parameter]'), count=find('[data-count]');
+    const sortedUnique=values=>[...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'));
+    for(const name of sortedUnique(m.parameters.map(p=>p.factor.name))) factor.add(new Option(name,name));
+    let selected=null, cap=30;
+    async function openParameter(parameter){
+      selected=parameter.id;
+      detail.textContent='Читаю ячейки…';
+      try{
+        const data=await workbookRequest(`/api/manifest/${sid}/parameters/${encodeURIComponent(parameter.id)}`);
+        if(!current() || selected!==parameter.id) return;
+        const p=data.parameter;
+        detail.innerHTML=`<section class="scenario-results"><h4>${esc(p.name)}</h4>
+          <p class="kv">${esc(p.factor.name)} · ${esc(p.location.block||p.location.sheet)} ·
+          ${p.active?'Лист участвует в текущем наборе':'Неактивный набор допущений'}</p>
+          ${p.description?'<p>'+esc(p.description)+'</p>':''}
+          <p class="kv">По карте формул: ${p.impacts.length?p.impacts.map(esc).join(', '):'связь с типовыми показателями не определена'}</p>
+          ${data.used_by.length?`<details><summary>Где используется строка</summary><ul>${data.used_by.map(x=>
+            '<li><code>'+esc(x.sheet)+'!'+esc(x.row)+'</code> '+esc(x.label)+'</li>').join('')}</ul></details>`:''}
+          <p class="kv">${data.measured.length?'В этой загрузке есть отдельные измерения.':'Связи этого входа ещё не подтверждены отдельным пересчётом в этой загрузке.'}</p>
+          ${data.measured.length?`<details><summary>Измеренные эффекты</summary><ul>${data.measured.map(x=>
+            '<li><code>'+esc(x.source.ref)+'</code> · '+scenarioNumber(x.source.achieved_pct)+' % · '+
+            x.metrics.map(v=>esc(v.ref)+' Δ '+scenarioNumber(v.delta)).join(', ')+'</li>').join('')}</ul></details>`:''}
+          <label>Входная ячейка при загрузке <select data-cell></select></label>
+          <button type="button" class="btn" data-add-stress>Добавить в стресс</button>
+          ${data.input_count>data.inputs.length?'<p class="kv">Показаны первые '+data.inputs.length+' ячеек.</p>':''}</section>`;
+        const cells=detail.querySelector('[data-cell]');
+        for(const [i,c] of data.inputs.entries()) cells.add(new Option(
+          [c.ref,c.period,scenarioNumber(c.value),p.location.unit].filter(Boolean).join(' · '),i));
+        const addStress=detail.querySelector('[data-add-stress]');
+        addStress.disabled=!p.active || !data.inputs.length;
+        addStress.onclick=()=>{
+          const cell=data.inputs[Number(cells.value)];
+          if(cell) openScenarioBuilder({source:cell.ref,period:cell.period});
+        };
+      }catch(e){ if(current() && selected===parameter.id) detail.textContent=e.message; }
+    }
+    function render(){
+      const needle=query.value.trim().toLocaleLowerCase('ru');
+      const visible=m.parameters.filter(p=>(!factor.value || p.factor.name===factor.value)
+        && (!block.value || p.location.block===block.value)
+        && [p.name,p.location.label,p.location.block,p.location.sheet].join(' ').toLocaleLowerCase('ru').includes(needle));
+      count.textContent=`Параметров найдено ${visible.length} из ${m.parameters.length}`;
+      list.replaceChildren(...visible.slice(0,cap).map(p=>{
+        const b=el('<button type="button" class="btn"></button>');
+        b.textContent=p.name+' · '+p.location.ref;
+        b.onclick=()=>openParameter(p);
+        return b;
+      }));
+      if(visible.length>cap){
+        const more=el('<button type="button" class="btn">Показать ещё</button>');
+        more.onclick=()=>{cap+=30; render();};
+        list.append(more);
+      }
+    }
+    function reset(){
+      cap=30; selected=null; detail.replaceChildren(); render();
+    }
+    factor.onchange=()=>{
+      const values=m.parameters.filter(p=>!factor.value || p.factor.name===factor.value).map(p=>p.location.block);
+      block.replaceChildren(new Option('Все',''),...sortedUnique(values).map(x=>new Option(x,x))); reset();
+    };
+    block.onchange=reset; query.oninput=reset; factor.onchange();
+  }catch(e){ if(current()) status.textContent=e.message; }
+}
+
+async function openScenarioBuilder(seed={}){
+  if(!SID || running) return;
+  const sid=SID, view=workbookView;
+  const existing=$('.scenario-builder');
+  if(existing){
+    existing.addScenarioSeed?.(seed);
+    existing.scrollIntoView({block:'nearest'}); existing.querySelector('select, input')?.focus(); return;
+  }
+  const current=()=>SID===sid && workbookView===view;
+  const form=add(el(`<form class="chart scenario-builder"><h3>Совместный стресс Excel</h3>
+    <fieldset><legend>Результаты для сравнения</legend><div data-outputs></div>
+      <button type="button" class="btn" data-add-output>Добавить результат</button></fieldset>
+    <fieldset><legend>Входные ячейки</legend><div data-inputs></div>
+      <button type="button" class="btn" data-add-input>Добавить вход</button></fieldset>
+    <details><summary>Связь не видна в формулах?</summary>
+      <label>Цель пробного пересчёта <input name="experiment" maxlength="300"></label></details>
+    <div class="scenario-actions">
+      <button type="submit" class="btn" data-preview disabled>Проверить план</button>
+      <label><input type="checkbox" name="compare" checked> Сравнить каждый вход с совместным стрессом</label>
+      <button type="button" class="btn" data-run disabled>Пересчитать в Excel</button>
+    </div>
+    <p class="kv" role="status">Загружаю показатели паспорта…</p>
+    <div data-plan></div><div data-result></div></form>`));
+  const find=s=>form.querySelector(s);
+  const outputs=find('[data-outputs]'), inputs=find('[data-inputs]');
+  const status=find('[role=status]'), preview=find('[data-plan]'), result=find('[data-result]');
+  const run=find('[data-run]'), check=find('[data-preview]');
+  const base='/api/excel-scenarios/'+sid;
+  let manifest, plan=null, busy=false, revision=0;
+  function invalidate(){
+    revision++;
+    if(plan) status.textContent='План изменён. Проверьте его перед запуском.';
+    plan=null; run.disabled=true; preview.replaceChildren(); result.replaceChildren();
+  }
+  const field=(row,key)=>row.querySelector('[data-field="'+key+'"]');
+  const value=(row,key)=>field(row,key).value.trim();
+  function target(row){
+    const metric=value(row,'metric');
+    return metric ? {metric,period:value(row,'period')} : {target:value(row,'target')};
+  }
+  function targetOptions(){
+    for(const row of inputs.children){
+      const control=field(row,'for-result'), previous=Number(control.value);
+      control.replaceChildren(...Array.from(outputs.children,(out,i)=>{
+        const option=field(out,'metric').selectedOptions[0];
+        const label=option?.value ? option.text : value(out,'target');
+        const period=value(out,'period');
+        return new Option((label||'Результат '+(i+1))+(period?' · '+period:''),i);
+      }));
+      control.selectedIndex=Math.min(previous,control.options.length-1);
+    }
+  }
+  function addOutput(){
+    if(outputs.children.length>=8) return null;
+    const row=el(`<div class="scenario-row">
+      <label>Показатель <select data-field="metric"><option value="">Указать адрес ячейки</option></select></label>
+      <label data-period>Период результата <select data-field="period"></select></label>
+      <label data-address>Адрес результата <input data-field="target" placeholder="Лист!A1"></label>
+      <button type="button" class="btn" data-remove>Убрать результат</button></div>`);
+    const metric=field(row,'metric'), period=field(row,'period'), address=field(row,'target');
+    for(const item of manifest.metrics.filter(m=>m.periods.length)){
+      metric.add(new Option(item.name,item.id));
+    }
+    function update(){
+      const item=manifest.metrics.find(m=>m.id===metric.value);
+      period.replaceChildren(...(item?.periods||[]).map(p=>new Option(p,p)));
+      period.disabled=!item; period.required=!!item;
+      address.disabled=!!item; address.required=!item;
+      row.querySelector('[data-period]').style.display=item?'':'none';
+      row.querySelector('[data-address]').style.display=item?'none':'';
+      targetOptions(); invalidate();
+    }
+    metric.onchange=update;
+    row.querySelector('[data-remove]').onclick=()=>{
+      if(outputs.children.length===1) return;
+      row.remove(); targetOptions(); invalidate();
+    };
+    outputs.append(row);
+    update();
+    return row;
+  }
+  function addInput(){
+    if(inputs.children.length>=8) return null;
+    const row=el(`<div class="scenario-row">
+      <label>Адрес входа <input data-field="source" placeholder="Лист!A1" required></label>
+      <label>Шок, % <input data-field="pct" type="number" step="any" value="-10" required></label>
+      <label>Период входа <input data-field="period" placeholder="Любой"></label>
+      <button type="button" class="btn" data-remove>Убрать вход</button>
+      <div class="scenario-candidates scenario-row">
+        <label>Искать по подписи <input data-field="query"></label>
+        <label>Связь с результатом <select data-field="for-result"></select></label>
+        <button type="button" class="btn" data-find>Найти ячейки</button>
+        <div class="scenario-candidates" data-candidates aria-live="polite"></div>
+      </div></div>`);
+    const candidateBox=row.querySelector('[data-candidates]');
+    const search=row.querySelector('[data-find]');
+    search.onclick=async()=>{
+      if(!current() || running || busy || search.disabled) return;
+      const out=outputs.children[Number(value(row,'for-result'))];
+      const stamp=revision;
+      if(!out || !(target(out).target || target(out).metric)){
+        candidateBox.textContent='Сначала выберите показатель или адрес результата.'; return;
+      }
+      candidateBox.textContent='Ищу входы по формулам…';
+      search.disabled=true;
+      try{
+        const d=await workbookRequest('/api/cell-stress/'+sid,{
+          ...target(out),query:value(row,'query'),source_period:value(row,'period')
+        });
+        if(!current() || revision!==stamp){ candidateBox.replaceChildren(); return; }
+        const buttons=d.trace.candidates.map(c=>{
+          const node=el(`<button type="button" class="btn">${esc(c.label||c.ref)} ·
+            <code>${esc(c.ref)}</code>${c.period?' · '+esc(c.period):''}</button>`);
+          node.onclick=()=>{
+            if(busy || running) return;
+            field(row,'source').value=c.ref;
+            field(row,'period').value=c.period||'';
+            candidateBox.replaceChildren(); invalidate();
+          };
+          return node;
+        });
+        candidateBox.replaceChildren(...buttons);
+        if(!buttons.length) candidateBox.textContent='Ячейки не найдены. Можно указать известный адрес вручную.';
+        if(d.trace.limitations.length){
+          const note=el('<p class="kv"></p>');
+          note.textContent=d.trace.limitations.map(k=>traceIssues[k]||k).join(' · ');
+          candidateBox.append(note);
+        }
+      }catch(e){ candidateBox.textContent=e.message; }
+      finally{ search.disabled=false; }
+    };
+    row.querySelector('[data-remove]').onclick=()=>{
+      if(inputs.children.length===1) return;
+      row.remove(); invalidate();
+    };
+    inputs.append(row);
+    targetOptions(); invalidate();
+    return row;
+  }
+  form.addScenarioSeed=data=>{
+    if(!manifest || busy || running || !current()) return;
+    if(data.source){
+      const row=[...inputs.children].find(r=>!value(r,'source')) || addInput();
+      if(!row){ status.textContent='В сценарии уже восемь входов.'; return; }
+      field(row,'source').value=data.source;
+      field(row,'period').value=data.period||'';
+    }
+    if(data.metric){
+      const row=[...outputs.children].find(r=>!value(r,'target') && !value(r,'metric')) || addOutput();
+      if(!row){ status.textContent='В сценарии уже восемь результатов.'; return; }
+      field(row,'metric').value=data.metric;
+      field(row,'metric').onchange();
+    }
+    targetOptions(); invalidate();
+  };
+  form.addEventListener('input',e=>{
+    if(e.target.name==='compare') return;
+    if(outputs.contains(e.target)) targetOptions();
+    invalidate();
+  });
+  form.addEventListener('change',e=>{
+    if(e.target.name!=='compare' && e.target.tagName==='SELECT'){ targetOptions(); invalidate(); }
+  });
+  find('[data-add-output]').onclick=addOutput;
+  find('[data-add-input]').onclick=addInput;
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    if(!current() || running || busy || !manifest) return;
+    invalidate();
+    const stamp=revision;
+    busy=true; check.disabled=true;
+    status.textContent='Проверяю адреса, периоды и значения Excel…';
+    try{
+      const data=await workbookRequest(base+'/prepare',{
+        metrics:Array.from(outputs.children,target),
+        shocks:Array.from(inputs.children,row=>({source:value(row,'source'),
+          source_period:value(row,'period'),pct:Number(value(row,'pct'))})),
+        experiment_reason:form.elements.experiment.value.trim()
+      });
+      if(!current()) return;
+      if(stamp!==revision){ status.textContent='План изменён. Проверьте его перед запуском.'; return; }
+      plan=data; preview.innerHTML=scenarioPreview(plan);
+      status.textContent='Сверьте план и запустите пересчёт.';
+      run.disabled=false;
+      preview.scrollIntoView({block:'nearest'});
+    }catch(e){ if(current()) status.textContent=e.message; }
+    finally{ busy=false; check.disabled=false; }
+  };
+  run.onclick=async()=>{
+    if(!plan || !current() || running || busy) return;
+    const id=plan.plan_id, compare=form.elements.compare.checked;
+    plan=null; run.disabled=true;
+    running=true; $('#send').disabled=true;
+    const controls=[...form.querySelectorAll('fieldset')];
+    controls.forEach(control=>{control.disabled=true;});
+    check.disabled=true; form.elements.experiment.disabled=true; form.elements.compare.disabled=true;
+    status.textContent='Excel пересчитывает сценарий и проверяет откат…';
+    try{
+      const data=await workbookRequest(base+'/execute',{plan_id:id,compare_individual:compare});
+      if(!current()) return;
+      result.innerHTML=scenarioOutcome(data);
+      status.textContent='Пересчёт завершён.';
+      result.scrollIntoView({block:'nearest'});
+    }catch(e){ if(current()){ status.textContent=e.message; preview.replaceChildren(); } }
+    finally{
+      running=false; $('#send').disabled=false;
+      controls.forEach(control=>{control.disabled=false;});
+      check.disabled=false; form.elements.experiment.disabled=false; form.elements.compare.disabled=false;
+    }
+  };
+  try{
+    manifest=await workbookRequest('/api/manifest/'+sid);
+    if(!current()) return;
+    addOutput(); addInput();
+    form.addScenarioSeed(seed);
+    check.disabled=false; status.textContent='';
+    field(outputs.firstElementChild,'metric').focus();
+  }catch(e){ if(current()) status.textContent=e.message; }
+}
+
 function renderParams(d, body){
   const P=d.parameters||[], o=d.overview||{};
   const row=p=>`<tr data-s="${esc((p.name+' '+p.label+' '+(p.block||'')+' '+p.sheet+' '+p.factor+' '+(p.sub||'')).toLowerCase())}"><td><b>${esc(p.name)}</b>${p.label&&p.label!==p.name?'<br><span style="color:var(--muted);font-size:12px">'+esc(p.label)+'</span>':''}</td><td class="mono">${esc(p.ref)}${p.scalar?'<br><span style="color:var(--muted)">одна ячейка</span>':''}</td><td style="font-size:12px">${esc(p.block||'')}</td><td>${esc(p.factor)}${p.sub?' / '+esc(p.sub):''}</td><td style="font-size:12px">${esc(Object.entries(p.values||{}).slice(0,3).map(([k,v])=>k+': '+v).join(' · '))} ${esc(p.unit||'')}</td><td style="font-size:12px">${p.influences?esc(p.influences.slice(0,4).join(', '))+(p.influences.length>4?'…':''):'<span style="color:#9a5a00">не доходит до ключевых показателей</span>'}</td></tr>`;
@@ -574,8 +996,10 @@ function renderCard(d){
   $('#card').innerHTML = `
     <div class="sec"><h3>Карточка модели</h3><div class="kv"><b>${esc(c.file)}</b><br>${c.sheets_total} листов · ${c.formulas_total.toLocaleString('ru-RU')} формул<br>${esc(c.template)}<br>итеративный расчёт: ${c.iterative_calc?'да (циклические ссылки)':'нет'}<br>прогноз по умолчанию с <b>${c.forecast_start??'—'}</b></div></div>
     <div class="sec"><h3>Готовность паспорта модели</h3><div id="manifestBox">${manifestStatusHtml(d.manifest)}</div>
+      <button class="btn" id="modelExplorer">Обзор модели</button>
       <button class="btn" id="reviewBindings">Проверить привязки</button>
-      <button class="btn" id="cellStress">Стресс ячейки</button></div>
+      <button class="btn" id="cellStress">Стресс ячейки</button>
+      <button class="btn" id="scenarioBuilder">Совместный стресс</button></div>
     ${d.engine?'':`<div class="sec warn">Пересчёт недоступен: ${esc(d.engine_error||'')}. Работают поиск и чтение, стресс-тесты — нет.</div>`}
     <div class="sec"><h3>Смысл модели: экономические факторы</h3><div id="semBox"></div></div>
     <div class="sec"><h3>Листы по ролям</h3><div class="sheetlist">${sheets}</div></div>
@@ -584,7 +1008,9 @@ function renderCard(d){
     <div class="sec"><h3>Главные допущения</h3>${drivers||'<div class="kv">не найдены</div>'}</div>
     <div class="sec"><h3>Потоки между листами</h3>${flows}</div>`;
   $('#reviewBindings').onclick=openBindingReview;
+  $('#modelExplorer').onclick=openModelExplorer;
   $('#cellStress').onclick=openCellStress;
+  $('#scenarioBuilder').onclick=()=>openScenarioBuilder();
 }
 
 const EXAMPLES = [
