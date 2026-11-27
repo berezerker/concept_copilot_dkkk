@@ -105,9 +105,11 @@ def t_create_plan(s, a, emit):
     steps = [str(x) for x in (a.get("steps") or [])][:10]
     if not steps:
         raise ValueError("Нужен непустой список шагов")
+    s._plan_evidence_start = len(getattr(s, "evidence", []))
     s.plan = {"goal": a.get("goal", ""), "steps": [{"title": t, "status": "pending", "note": ""} for t in steps]}
     emit("plan", s.plan)
-    return {"ok": True, "steps": len(steps), "hint": "Выполняй шаги по порядку и отмечай их через update_plan."}
+    return {"ok": True, "steps": len(steps),
+            "hint": "Сначала выполни работу инструментом модели, затем отметь результат через update_plan."}
 
 
 def t_update_plan(s, a, emit):
@@ -122,6 +124,14 @@ def t_update_plan(s, a, emit):
         raise ValueError("status: in_progress, done или skipped")
     if status == "skipped" and not a.get("note"):
         raise ValueError("Для пропущенного шага нужна причина в note")
+    if status == "done":
+        evidence = getattr(s, "evidence", [])[getattr(s, "_plan_evidence_start", 0):]
+        work = next((e for e in reversed(evidence) if e["ok"] and e["tool"] not in ("create_plan", "update_plan")), None)
+        if work is None:
+            raise ValueError("Для завершения шага сначала получи успешный результат инструмента модели в текущем плане")
+        st["evidence"] = {"id": work["id"], "tool": work["tool"]}
+    else:
+        st.pop("evidence", None)
     st["status"] = status
     st["note"] = a.get("note", "")[:300]
     if a.get("new_steps"):
@@ -1080,7 +1090,7 @@ TOOLS = [
          "steps": {"type": "array", "items": {"type": "string"}, "description": "Шаги плана"}},
          "required": ["goal", "steps"]}},
     {"name": "update_plan", "fn": t_update_plan,
-     "description": "Отметить статус шага плана (номер с 1). Можно добавить новые шаги, если план пришлось расширить.",
+     "description": "Отметить статус шага (номер с 1). Статус done требует успешного результата инструмента модели.",
      "parameters": {"type": "object", "properties": {
          "step": {"type": "integer"}, "status": {"type": "string", "enum": ["in_progress", "done", "skipped"]},
          "note": {"type": "string", "description": "Короткий итог шага"},

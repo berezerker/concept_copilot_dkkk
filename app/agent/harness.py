@@ -63,18 +63,20 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
 
         if not resp.tool_calls:
             answer = resp.content.strip() or "Модель вернула пустой ответ."
-            pending = [i + 1 for i, st in enumerate((session.plan or {}).get("steps", []))
-                       if st["status"] not in ("done", "skipped")]
-            if (pending or failures or (plan_mode and not session.plan)) and not completion_retry:
+            steps = (session.plan or {}).get("steps", [])
+            pending = [i + 1 for i, st in enumerate(steps) if st["status"] not in ("done", "skipped")]
+            needs_evidence = plan_mode and not any(st["status"] == "done" and st.get("evidence") for st in steps)
+            if (pending or failures or needs_evidence) and not completion_retry:
                 completion_retry = True
                 turn.append({"role": "assistant", "content": answer})
                 turn.append({"role": "user", "content":
                     "Проверка выполнения: незавершённые шаги " + str(pending) +
                     "; ошибки инструментов: " + json.dumps(failures, ensure_ascii=False) +
+                    (". Нет завершённого шага с результатом инструмента" if needs_evidence else "") +
                     ". Исправь ошибки и повтори нужные инструменты. Обнови план только по фактическим результатам; "
                     "невыполнимые шаги пропусти с причиной. Не объявляй расчёт успешным без подтверждения."})
                 continue
-            complete = not failures and not pending and (not plan_mode or bool(session.plan))
+            complete = not failures and not pending and not needs_evidence
             if failures:
                 answer = "Задача не завершена: остались ошибки инструментов.\n\n" + "\n".join(
                     f"- {failure['tool']}: {failure['error']}" for failure in failures.values())

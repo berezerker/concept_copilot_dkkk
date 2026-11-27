@@ -41,6 +41,19 @@ class Harness(unittest.TestCase):
         self.assertEqual(s.plan["steps"][0]["status"], "pending")
         self.assertFalse(answer["complete"])
 
+    def test_plan_needs_successful_work_in_current_plan(self):
+        s, answer = self.run_script([call("create_plan", steps=["Старый расчёт"]), call("work"),
+                                    call("create_plan", steps=["Новый расчёт"]),
+                                    call("update_plan", step=1, status="done")])
+        self.assertEqual(s.plan["steps"][0]["status"], "pending")
+        self.assertFalse(answer["complete"])
+        self.assertIn("успешный результат инструмента", answer["text"])
+
+    def test_skipping_every_step_keeps_turn_incomplete(self):
+        _, answer = self.run_script([call("create_plan", steps=["Расчёт"]),
+                                    call("update_plan", step=1, status="skipped", note="Нет входа")])
+        self.assertFalse(answer["complete"])
+
     def test_failed_tool_cannot_be_hidden_by_final_or_plan(self):
         _, answer = self.run_script([call("create_plan", steps=["Расчёт"]), call("work"),
                                     call("update_plan", step=1, status="done")],
@@ -62,6 +75,7 @@ class Harness(unittest.TestCase):
                                     call("update_plan", step=1, status="done", note="42")], work)
         self.assertTrue(answer["complete"])
         self.assertEqual([e["ok"] for e in s.evidence if e["tool"] == "work"], [False, True])
+        self.assertEqual(s.plan["steps"][0]["evidence"], {"id": "work", "tool": "work"})
 
     def test_limit_keeps_steps_unfinished(self):
         s, answer = self.run_script([call("create_plan", steps=["Расчёт"])], max_steps=1)
