@@ -56,7 +56,12 @@ def prepare_excel_scenario(s, args, emit):
                all(isinstance(item, dict) for item in items) for items in (shocks, metrics)):
         raise ValueError(f"Нужно от 1 до {LIMIT} входов и столько же контрольных ячеек")
     require_excel(s)
-    resolved = [_target(s, item) for item in metrics]
+    resolved = []
+    for i, item in enumerate(metrics, start=1):
+        try:
+            resolved.append(_target(s, item))
+        except (KeyError, ValueError) as e:
+            raise ValueError(f"Результат {i} (metrics) — {e}") from e
     inputs = [_scenario_input(s, shock) for shock in shocks]
     outputs = [describe_target(s, *item) for item in resolved]
     source_refs = [detail["source"] for _, detail in inputs]
@@ -186,11 +191,14 @@ TOOLS_SCENARIO = [
              "source_period": {"type": "string", "description": "Точный период входа, обязателен с parameter"},
              "pct": {"type": "number", "description": "Относительный шок в процентах, не процентных пунктах"},
          }, "required": ["pct"]}},
-         "metrics": {"type": "array", "items": {"type": "object", "properties": {
+         "metrics": {"type": "array", "description": "По одному объекту на каждый результат и период. "
+                                                     'Например, {"metric":"metric:dscr","period":"2026"} '
+                                                     'или {"target":"Лист!A1"}.',
+                     "items": {"type": "object", "properties": {
              "target": {"type": "string", "description": "Адрес результата: лист!A1"},
-             "metric": {"type": "string", "description": "ID показателя паспорта вместо target"},
-             "period": {"type": "string", "description": "Точный период при выборе metric"},
-         }}},
+             "metric": {"type": "string", "description": "ID показателя паспорта"},
+             "period": {"type": "string", "description": "Точный период результата, например 2026"},
+         }, "anyOf": [{"required": ["target"]}, {"required": ["metric", "period"]}]}},
          "experiment_reason": {"type": "string", "description": "Цель пробного пересчёта, если карта не показывает путь"},
      }, "required": ["shocks", "metrics"]}},
     {"name": "execute_excel_scenario", "fn": execute_excel_scenario,

@@ -5,21 +5,30 @@ from ..workbook.periods import norm_period
 
 
 def _target(s, args):
-    if args.get("target"):
-        if args.get("metric") or args.get("period"):
-            raise ValueError("Укажите адрес результата или показатель и период")
-        return cells.cell(s.idx, args["target"]), None
-    if not args.get("metric") or not args.get("period"):
-        raise ValueError("Укажите адрес результата или показатель и точный период")
-    resolved = manifest.resolve(s, args["metric"], kind="metric")
+    ref = args.get("target")
+    metric = args.get("metric")
+    requested_period = args.get("period")
+    node = cells.cell(s.idx, ref) if ref else None
+    if node is not None:
+        if requested_period and cells.period_at(s.idx, node) != norm_period(requested_period):
+            raise ValueError(f"{ref}: адрес результата не соответствует периоду {requested_period}")
+        if not metric:
+            return node, None
+    elif not metric or not requested_period:
+        raise ValueError("Укажите target (лист!A1) либо одновременно metric и period")
+    resolved = manifest.resolve(s, metric, kind="metric")
     if resolved["status"] != "resolved":
         refs = ", ".join(m["id"] for m in resolved["candidates"])
         raise ValueError(f"Уточните показатель: {resolved['status']} ({refs})")
     entry = s.catalog["concepts"][resolved["selected"]["catalog_id"]]
     sheet, row = (entry["primary"][k] for k in ("sheet", "row"))
+    if node is not None:
+        if node[:2] != (sheet, row):
+            raise ValueError(f"{ref}: адрес не соответствует привязке показателя {metric} ({sheet}!{row})")
+        return node, entry
     sh = s.idx.sheet(sheet)
     ri = s.idx.row(sheet, row)
-    period = norm_period(args["period"])
+    period = norm_period(requested_period)
     matching = [c for c, y in sh.years_for(row).items() if y == period and
                 (c in ri.formulas or cells.numeric(ri.values.get(c)))]
     if len(matching) != 1:
