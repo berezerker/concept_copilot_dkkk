@@ -729,7 +729,7 @@ class ExcelEngine(CalcEngine):
                 cell_ref = f"'{sheet.replace(chr(39), chr(39) * 2)}'!{get_column_letter(c1 + j)}{r1 + i}"
                 write(self._rng(cell_ref), [[value]])
         if not same_values(read(rng), expected, tol=0):
-            raise RestorationError(f"{ref}: значения/формулы не записаны точно")
+            raise RuntimeError(f"{ref}: значения/формулы не записаны точно")
 
     def _split(self, ref):
         return split_ref(ref)

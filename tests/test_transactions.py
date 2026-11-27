@@ -106,6 +106,23 @@ class Transactions(unittest.TestCase):
         with self.assertRaises(RestorationError):
             self.e._read(self.watch)
 
+    def test_unverified_shock_with_verified_rollback_keeps_engine_usable(self):
+        setter = Rng.value.fset
+
+        def write(rng, values):
+            if all(x == 90. for row in values for x in row):
+                return
+            setter(rng, values)
+
+        with patch.object(Rng, "value", property(Rng.value.fget, write)):
+            with self.assertRaisesRegex(RuntimeError, "не записаны точно") as caught:
+                self.run_scenario()
+        self.assertNotIsInstance(caught.exception, RestorationError)
+        self.assertTrue(self.e.last_transaction["restored"])
+        self.assert_base()
+        self.run_scenario()
+        self.assertEqual(self.e.last_transaction["status"], "verified")
+
     def test_restore_continues_after_one_failure(self):
         setter = Rng.value.fset
         def write(rng, values):
