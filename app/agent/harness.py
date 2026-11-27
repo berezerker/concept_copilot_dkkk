@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import traceback
@@ -38,6 +39,7 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
     system = {"role": "system", "content": system_prompt(session)}
     force_plan = plan_mode
     failures = {}
+    observations = {}
     completion_retry = False
     session.evidence = []
     specs = tool_specs()
@@ -156,12 +158,27 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                 evidence["execution"] = execution
                 if isinstance(result, dict):
                     result = dict(result, execution=execution)
+            serialized = json.dumps(result, ensure_ascii=False, default=str)
+            model_result = result
+            if ok and not execution and tool.get("compact_repeated_read"):
+                observation = (c.name, key)
+                fingerprint = hashlib.sha256(serialized.encode("utf-8")).digest()
+                previous = observations.get(observation)
+                if previous and previous[0] == fingerprint:
+                    evidence["same_as_call"] = previous[1]
+                    model_result = {
+                        "unchanged": True, "same_as_call": previous[1],
+                        "next_action": "Результат этого чтения уже получен. Перейди к следующему шагу или измени запрос, "
+                                       "если нужны другие данные.",
+                    }
+                else:
+                    observations[observation] = (fingerprint, c.id)
             session.evidence.append(evidence)
-            ui_result = result if len(json.dumps(result, ensure_ascii=False, default=str)) <= 20000 else _short(result, 20000)
+            ui_result = result if len(serialized) <= 20000 else _short(result, 20000)
             emit("tool_end", {"id": c.id, "name": c.name, "ok": ok, "seconds": round(time.time() - t1, 1),
                               "result": ui_result})
             turn.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
-                         "content": _short(result, client.max_tool_chars)})
+                         "content": _short(model_result, client.max_tool_chars)})
 
     emit("answer", {"text": "Достигнут лимит шагов агента. Задача не завершена; оставшиеся шаги не отмечены выполненными.",
                     "complete": False})

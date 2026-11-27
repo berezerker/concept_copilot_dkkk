@@ -1147,7 +1147,7 @@ TOOLS = [
          "query": {"type": "string"}, "sheet": {"type": "string", "description": "Искать только на этом листе"},
          "only_inputs": {"type": "boolean", "description": "Только строки с числовыми допущениями"},
          "limit": {"type": "integer"}}, "required": ["query"]}},
-    {"name": "read_rows", "fn": t_read_rows,
+    {"name": "read_rows", "fn": t_read_rows, "compact_repeated_read": True,
      "description": "Прочитать строки листа: подпись, единицы, значения по годам, пример формулы прогноза.",
      "parameters": {"type": "object", "properties": {
          "sheet": {"type": "string"}, "rows": {"type": "array", "items": {"type": "integer"}},
