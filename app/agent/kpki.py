@@ -19,6 +19,7 @@ import json
 import time
 
 from ..workbook import semantics as sm
+from ..workbook.transaction import RestorationError
 from .registry import TOOL_MAP
 from .tools import rnd
 
@@ -67,11 +68,12 @@ def run_kpki(s, client, opts, emit):
         cid = f"kpki{i}"
         emit("tool_start", {"id": cid, "name": name, "args": args})
         t0 = time.time()
-        ok = True
+        error = None
         try:
             res = TOOL_MAP[name]["fn"](s, args, emit)
-        except Exception as e:  # шаг не ломает весь сценарий
-            ok, res = False, {"error": f"{type(e).__name__}: {e}"}
+        except Exception as e:
+            error, res = e, {"error": f"{type(e).__name__}: {e}"}
+        ok = error is None
         emit("tool_end", {"id": cid, "name": name, "ok": ok, "seconds": round(time.time() - t0, 1), "result": res})
         plan["steps"][i]["status"] = "done" if ok else "skipped"
         if ok and note_fn:
@@ -82,6 +84,8 @@ def run_kpki(s, client, opts, emit):
         elif not ok:
             plan["steps"][i]["note"] = res["error"][:160]
         emit("plan", plan)
+        if isinstance(error, RestorationError):
+            raise error
         R[name] = res if ok else None
         return res if ok else None
 

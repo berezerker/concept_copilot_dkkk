@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.agent.harness import run_turn
+from app.agent.kpki import run_kpki
 from app.agent.tools import t_create_plan, t_update_plan
+from app.agent.tools_credit import t_stress_pack
 from app.llm.base import LLMClient, LLMResponse, ToolCall
+from app.workbook.transaction import RestorationError
 
 
 def call(name, **args):
@@ -110,6 +113,33 @@ class Harness(unittest.TestCase):
         self.assertNotIn("update_plan", answer["text"])
         failed = next(row for row in s.evidence if not row["ok"])
         self.assertEqual(failed["execution"]["recent_transactions"][0]["status"], "restore_failed")
+
+    def test_kpki_stops_at_original_restore_error(self):
+        error = RestorationError("Inputs!C3: восстановление не подтверждено")
+        s = SimpleNamespace(card={"file": "sample.xlsx"}, require_engine=lambda: None)
+        events = []
+        tools = {
+            "audit_model": {"fn": lambda *args: {"total": 0}},
+            "covenant_check": {"fn": lambda *args: {"rules": []}},
+            "dependency_analysis": {"fn": lambda *args: {
+                "tornados": [{"factors": [{"name": "Цены реализации продукции", "market": True, "delta": -1}]}]
+            }},
+            "stress_pack": {"fn": t_stress_pack},
+        }
+        rules = [{"sheet": "Calc", "row": 8, "threshold": 1.3}]
+        with patch("app.agent.kpki.TOOL_MAP", tools), \
+             patch("app.agent.tools_credit._metric_refs", return_value=[]), \
+             patch("app.agent.tools_credit._base_series", return_value=[]), \
+             patch("app.agent.tools_credit._run", side_effect=error) as recalc:
+            with self.assertRaises(RestorationError) as caught:
+                run_kpki(s, None, {"rules": rules}, lambda event, data: events.append((event, data)))
+        self.assertIs(caught.exception, error)
+        recalc.assert_called_once()
+        last = [data for event, data in events if event == "tool_end"][-1]
+        self.assertEqual(last["name"], "stress_pack")
+        self.assertFalse(last["ok"])
+        self.assertIn(str(error), last["result"]["error"])
+        self.assertFalse(any(event == "answer" for event, _ in events))
 
 
 if __name__ == "__main__":
