@@ -1,4 +1,5 @@
 """Свободный план и ошибки: harness не завершает шаги за модель."""
+import json
 import os
 import sys
 import threading
@@ -53,6 +54,26 @@ class Harness(unittest.TestCase):
         _, answer = self.run_script([call("create_plan", steps=["Расчёт"]),
                                     call("update_plan", step=1, status="skipped", note="Нет входа")])
         self.assertFalse(answer["complete"])
+
+    def test_identical_reads_stay_compact_and_changed_read_is_preserved(self):
+        state = SimpleNamespace(plan=None, history=[], id="repeated-reads", lock=threading.Lock())
+        args = {"sheet": "Модель", "rows": [42], "years": ["2026", "2027"]}
+        ids = ["read-one", "repeat-one", "read-changed", "repeat-changed"]
+        client = Script([LLMResponse(tool_calls=[ToolCall(id_, "read_rows", args)]) for id_ in ids])
+        readings = iter([42, 42, 43, 43])
+        tools = {"read_rows": {"fn": lambda *_: {"value": next(readings)}, "compact_repeated_read": True}}
+        visible = []
+        with patch("app.agent.harness.system_prompt", return_value="test"), \
+             patch("app.agent.harness.TOOL_MAP", tools), patch.object(client, "chat", wraps=client.chat) as requests:
+            run_turn(state, client, "Прочитай строку", lambda k, d: visible.append((k, d)), plan_mode=False)
+        transcript = requests.call_args_list[-1].args[0]
+        model_results = [json.loads(m["content"]) for m in transcript if m["role"] == "tool"]
+        self.assertEqual(model_results[0], {"value": 42})
+        self.assertEqual(model_results[1]["same_as_call"], ids[0])
+        self.assertEqual(model_results[2], {"value": 43})
+        self.assertEqual(model_results[3]["same_as_call"], ids[2])
+        self.assertEqual([d["result"]["value"] for kind, d in visible if kind == "tool_end"], [42, 42, 43, 43])
+        self.assertEqual([e.get("same_as_call") for e in state.evidence], [None, ids[0], None, ids[2]])
 
     def test_failed_tool_cannot_be_hidden_by_final_or_plan(self):
         _, answer = self.run_script([call("create_plan", steps=["Расчёт"]), call("work"),

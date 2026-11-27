@@ -135,11 +135,22 @@ def execute_excel_scenario(s, args, emit):
            for ref in refs):
         raise RuntimeError("База после завершения серии отличается от плана")
     s.scenario_plans.pop(plan["plan_id"], None)
+    separate_trials = individual or ([result] if len(overrides) == 1 else [])
+    zero_effect = [trial["inputs"][0]["ref"] for trial in separate_trials
+                   if all(metric["delta"] == 0 for metric in trial["metrics"])]
     verified = {"plan_id": plan["plan_id"], "file_hash": plan["file_hash"], "phase": "verified",
                 "verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "rollback_verified": True, "combined": result, "individual": individual,
-                "inputs": [{k: v for k, v in item.items() if k != "paths"} for item in plan["inputs"]],
-                "metrics": [{k: v for k, v in item.items() if k != "target_formula"} for item in plan["metrics"]]}
+                "rollback_verified": True}
+    if zero_effect:
+        verified.update(zero_effect_inputs=zero_effect,
+                        note="Эти отдельные шоки не изменили выбранные результаты в Excel. "
+                             "При неоднозначной привязке проверь другие подходящие входы.")
+    verified.update(
+        combined=result,
+        individual=individual,
+        inputs=[{k: v for k, v in item.items() if k != "paths"} for item in plan["inputs"]],
+        metrics=[{k: v for k, v in item.items() if k != "target_formula"} for item in plan["metrics"]],
+    )
     history = s.verified_scenarios
     if len(history) >= 20:
         del history[next(iter(history))]
