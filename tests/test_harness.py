@@ -126,6 +126,21 @@ class Harness(unittest.TestCase):
         self.assertFalse(answer["complete"])
         self.assertIn("JSON-объектом", answer["text"])
 
+    def test_validation_failure_asks_for_corrected_arguments(self):
+        s = SimpleNamespace(plan=None, history=[], id="recovery-test", lock=threading.Lock())
+        events = []
+
+        def work(*_):
+            raise ValueError("Укажите период")
+
+        with patch("app.agent.harness.system_prompt", return_value="test"), \
+             patch("app.agent.harness.TOOL_MAP", {"work": {"fn": work}}):
+            run_turn(s, Script([call("work")]), "Подготовь расчёт", lambda k, d: events.append((k, d)), plan_mode=False)
+        failure = next(d["result"] for k, d in events if k == "tool_end")
+        self.assertIn("Исправь аргументы", failure["recovery"])
+        self.assertEqual(failure["failed_call_id"], "work")
+        self.assertFalse(events[-1][1]["complete"])
+
     def test_tainted_engine_still_allows_plan_to_record_failure(self):
         engine = SimpleNamespace(_tainted=False, n_scen=0, transactions=[])
         def work(s, args, emit):

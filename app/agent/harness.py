@@ -108,6 +108,7 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
             key = json.dumps(c.arguments, sort_keys=True, ensure_ascii=False)
             retry_of = None
             execution = None
+            recovery = "Устрани причину ошибки, затем повтори вызов. Если изменишь аргументы, укажи retry_of."
             try:
                 if tool is None:
                     raise ValueError(f"Нет инструмента {c.name}")
@@ -139,9 +140,13 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                     raise
                 ok = False
                 result = {"error": f"{type(e).__name__}: {e}"}
-                if not isinstance(e, (ValueError, KeyError)):
+                if isinstance(e, (ValueError, KeyError)):
+                    recovery = "Исправь аргументы с учётом ошибки и передай failed_call_id в retry_of. " \
+                               "Если данных не хватает, сначала уточни их."
+                else:
                     result["trace"] = traceback.format_exc(limit=2)[-600:]
                 if getattr(getattr(session, "engine", None), "_tainted", False):
+                    recovery = "Откат не подтверждён. Для расчётов нужно заново загрузить книгу."
                     from ..workbook import manifest as mf
                     session.refresh_manifest()
                     emit("manifest", mf.summary(session.manifest))
@@ -151,8 +156,7 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
             else:
                 failures[c.id] = {"tool": c.name, "args": key,
                                   "error": str(result.get("error") or "Инструмент не подтвердил выполнение")}
-                result = dict(result, failed_call_id=c.id,
-                              recovery="Повтори тот же вызов или передай retry_of с этим id при исправлении аргументов")
+                result = dict(result, failed_call_id=c.id, recovery=recovery)
             evidence = {"id": c.id, "tool": c.name, "ok": ok}
             if execution:
                 evidence["execution"] = execution
