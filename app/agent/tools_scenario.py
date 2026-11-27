@@ -25,28 +25,29 @@ def _scenario_input(s, args):
     source, parameter = args.get("source"), args.get("parameter")
     if bool(source) == bool(parameter):
         raise ValueError("Укажите точный адрес входа или параметр паспорта и период входа")
-    if source:
+    location = cells.row_reference(s.idx, source) if source else None
+    if source and not location:
         return resolve_input(s, args)
     if not args.get("source_period"):
-        raise ValueError("Для параметра паспорта укажите точный период входа или выберите ячейку по адресу")
+        raise ValueError("Для строки паспорта укажите точный период входа или выберите ячейку по адресу A1")
     period = norm_period(args["source_period"])
-    resolved = manifest.resolve(s, parameter, kind="parameter", intent="shock", limit=4)
-    if resolved["status"] != "resolved":
-        candidates = ", ".join(f"{item['location']['ref']} — {item['location']['label']}"
-                               for item in resolved["candidates"])
-        detail = f" Возможные строки: {candidates}." if candidates else ""
-        raise ValueError(f"Уточните параметр «{parameter}» из паспорта или укажите адрес ячейки.{detail}")
-    selected = resolved["selected"]
-    location = selected["location"]
-    sheet, row = location["sheet"], location["row"]
-    info = s.idx.row(sheet, row)
-    matching = [col for col, value in s.idx.sheet(sheet).years_for(row).items()
-                if value == period and col not in info.formulas and cells.numeric(info.values.get(col))]
-    if len(matching) != 1:
-        raise ValueError(f"{location['ref']}: в периоде {period} нет единственной ячейки с введённым числом. "
-                         "Укажите точный адрес входа.")
-    node, detail = resolve_input(s, {**args, "source": cells.ref_for((sheet, row, matching[0]))})
-    return node, {**detail, "parameter_id": selected["id"]}
+    parameter_id = None
+    if parameter:
+        resolved = manifest.resolve(s, parameter, kind="parameter", intent="shock", limit=4)
+        if resolved["status"] != "resolved":
+            candidates = ", ".join(f"{item['location']['ref']} — {item['location']['label']}"
+                                   for item in resolved["candidates"])
+            detail = f" Возможные строки: {candidates}." if candidates else ""
+            raise ValueError(f"Уточните параметр «{parameter}» из паспорта или укажите адрес ячейки.{detail}")
+        selected = resolved["selected"]
+        loc = selected["location"]
+        location = (loc["sheet"], loc["row"])
+        parameter_id = selected["id"]
+    node = cells.cell_for_period(s.idx, location, period, input_only=True)
+    node, detail = resolve_input(s, {**args, "source": cells.ref_for(node)})
+    if parameter_id:
+        detail["parameter_id"] = parameter_id
+    return node, detail
 
 
 def prepare_excel_scenario(s, args, emit):
@@ -89,7 +90,7 @@ def prepare_excel_scenario(s, args, emit):
     plans = s.scenario_plans
     if len(plans) >= LIMIT:
         del plans[next(iter(plans))]
-    plans[plan["plan_id"]] = (deepcopy(plan), deepcopy(metrics), refs, baseline, overrides)
+    plans[plan["plan_id"]] = (deepcopy(plan), deepcopy(metrics), deepcopy(shocks), refs, baseline, overrides)
     emit("progress", {"text": "Предпроверка Excel завершена. Адреса и исходные значения зафиксированы."})
     return plan
 
@@ -100,12 +101,14 @@ def execute_excel_scenario(s, args, emit):
     saved = s.scenario_plans.get(args.get("plan_id"))
     if not saved:
         raise ValueError("План сценария отсутствует или устарел. Подготовьте его заново.")
-    plan, selectors, refs, baseline, overrides = saved
-    current_targets = [cells.ref_for(_target(s, item)[0]) for item in selectors]
-    if plan["file_hash"] != s.idx.file_hash or current_targets != [m["target"] for m in plan["metrics"]]:
+    plan, metric_selectors, input_selectors, refs, baseline, overrides = saved
+    if plan["file_hash"] != s.idx.file_hash:
+        raise ValueError("Книга изменилась. Подготовьте сценарий заново.")
+    current_targets = [cells.ref_for(_target(s, item)[0]) for item in metric_selectors]
+    current_sources = [_scenario_input(s, item)[1]["source"] for item in input_selectors]
+    if (current_targets != [m["target"] for m in plan["metrics"]]
+            or current_sources != [item["source"] for item in plan["inputs"]]):
         raise ValueError("Книга или привязка изменились. Подготовьте сценарий заново.")
-    for item in plan["inputs"]:
-        resolve_input(s, {"source": item["source"], "pct": item["requested_pct"]})
 
     def recalc(changes):
         values, iterations = s.engine.scenario(changes, refs, refs, expected_watch=baseline)
@@ -184,19 +187,21 @@ TOOLS_SCENARIO = [
                     "Возвращает plan_id, точные адреса, базу и пути формул. Книга не меняется.",
      "parameters": {"type": "object", "properties": {
          "shocks": {"type": "array", "items": {"type": "object", "properties": {
-             "source": {"type": "string", "description": "Адрес введённого числа: лист!A1"},
+             "source": {"type": "string", "description": "Адрес лист!A1 либо строка лист!номер с source_period"},
              "parameter": {"type": "string", "description": "ID или имя параметра паспорта вместо source"},
              "source_period": {"type": "string", "description": "Точный период входа, обязателен с parameter"},
              "pct": {"type": "number", "description": "Относительный шок в процентах, не процентных пунктах"},
          }, "required": ["pct"]}},
          "metrics": {"type": "array", "description": "По одному объекту на каждый результат и период. "
                                                      'Например, {"metric":"metric:dscr","period":"2026"} '
-                                                     'или {"target":"Лист!A1"}.',
+                                                     'или {"target":"Лист!34","period":"2026"}.',
                      "items": {"type": "object", "properties": {
-             "target": {"type": "string", "description": "Адрес результата: лист!A1"},
+             "target": {"type": "string", "description": "Адрес лист!A1 либо строка лист!номер с period"},
              "metric": {"type": "string", "description": "ID показателя паспорта"},
+             "concept": {"type": "string", "description": "Совместимый псевдоним для metric"},
              "period": {"type": "string", "description": "Точный период результата, например 2026"},
-         }, "anyOf": [{"required": ["target"]}, {"required": ["metric", "period"]}]}},
+         }, "anyOf": [{"required": ["target"]}, {"required": ["metric", "period"]},
+                      {"required": ["concept", "period"]}]}},
          "experiment_reason": {"type": "string", "description": "Цель пробного пересчёта, если карта не показывает путь"},
      }, "required": ["shocks", "metrics"]}},
     {"name": "execute_excel_scenario", "fn": execute_excel_scenario,

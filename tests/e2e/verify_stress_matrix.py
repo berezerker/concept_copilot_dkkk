@@ -31,6 +31,10 @@ def _verified_plan(session, payload, parameter_shocks):
     client = TestClient(app)
     SESSIONS[session.id] = session
     try:
+        def row_for(ref):
+            sheet, row, _ = cell(session.idx, ref)
+            return f"{sheet}!{row}"
+
         def post(suffix, data):
             response = client.post(base_url + "/" + suffix, json=data)
             assert response.status_code == 200, response.json()
@@ -40,13 +44,18 @@ def _verified_plan(session, payload, parameter_shocks):
         exact = post("prepare", payload)
         outputs = [{**selector, "target": result["target"]}
                    for selector, result in zip(payload["metrics"], exact["metrics"])]
-        preview = post("prepare", {"shocks": parameter_shocks, "metrics": outputs})
+        named = post("prepare", {"shocks": parameter_shocks, "metrics": outputs})
+        preview = post("prepare", {
+            "shocks": [{**shock, "source": row_for(shock["source"])} for shock in payload["shocks"]],
+            "metrics": [{**result, "target": row_for(result["target"])} for result in outputs],
+        })
         assert session.engine.n_scen == before_prepare, "Предпроверка запустила сценарий"
-        assert preview["metrics"] == exact["metrics"]
-        assert [item["parameter_id"] for item in preview["inputs"]] == [
+        assert preview["metrics"] == named["metrics"] == exact["metrics"]
+        assert preview["inputs"] == exact["inputs"]
+        assert [item["parameter_id"] for item in named["inputs"]] == [
             shock["parameter"] for shock in parameter_shocks
         ]
-        assert [{k: v for k, v in item.items() if k != "parameter_id"} for item in preview["inputs"]] == exact["inputs"]
+        assert [{k: v for k, v in item.items() if k != "parameter_id"} for item in named["inputs"]] == exact["inputs"]
         checked = post("execute", {"plan_id": preview["plan_id"], "compare_individual": True})
         previous_count = session.engine.n_scen
         expired = client.post(base_url + "/execute", json={"plan_id": preview["plan_id"]})
