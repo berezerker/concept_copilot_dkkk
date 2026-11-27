@@ -610,6 +610,7 @@ function scenarioOutcome(data){
 
 function showModelIntro(d){
   const m=d.manifest;
+  const suggestions=m.suggested_parameters||[];
   const box=add(el(`<section class="chart model-intro">
     <header><h3>${esc(d.card.file)}</h3>
       <p class="kv">${esc(d.semantics?.industry_name||'Отрасль не определена')} ·
@@ -621,22 +622,40 @@ function showModelIntro(d){
       <button type="button" class="btn" data-model>Открыть обзор модели</button>
       <button type="button" class="btn" data-edit>Проверить привязки</button>
       <button type="button" class="btn" data-stress>Открыть совместный стресс</button>
-    </div></section>`));
+    </div>
+    ${suggestions.length?'<p class="kv">Параметры со связями по карте формул</p><div class="scenario-actions" data-suggestions></div>':''}
+    </section>`));
   box.querySelector('[data-model]').onclick=openModelExplorer;
   box.querySelector('[data-edit]').onclick=openBindingReview;
   box.querySelector('[data-stress]').onclick=()=>openScenarioBuilder();
+  const suggested=box.querySelector('[data-suggestions]');
+  for(const item of suggestions){
+    const button=el('<button type="button" class="btn"></button>');
+    button.textContent='Посмотреть «'+item.name+'» · '+item.ref;
+    button.onclick=()=>openModelExplorer(item.id);
+    suggested.append(button);
+  }
 }
 
-async function openModelExplorer(){
+async function openModelExplorer(parameterId){
   if(!SID || running) return;
+  const requested=typeof parameterId==='string' ? parameterId : '';
   const existing=$('.model-explorer');
-  if(existing){ existing.scrollIntoView({block:'nearest'}); return; }
+  if(existing){
+    existing.scrollIntoView({block:'nearest'});
+    if(requested){
+      existing.dataset.focusParameter=requested;
+      existing.focusParameter?.(requested);
+    }
+    return;
+  }
   const sid=SID, view=workbookView;
   const current=()=>sid===SID && view===workbookView;
   const panel=add(el(`<section class="chart model-explorer"><div class="scenario-actions">
     <h3>Обзор модели</h3><button type="button" class="btn" data-close>Закрыть обзор</button></div>
     <p class="kv" role="status">Читаю паспорт…</p><div data-explorer></div></section>`));
   const find=s=>panel.querySelector(s);
+  panel.dataset.focusParameter=requested;
   find('[data-close]').onclick=()=>panel.remove();
   const status=find('[role=status]');
   try{
@@ -805,6 +824,14 @@ async function openModelExplorer(){
       block.replaceChildren(new Option('Все',''),...sortedUnique(values).map(x=>new Option(x,x))); reset();
     };
     block.onchange=reset; query.oninput=reset; factor.onchange();
+    panel.focusParameter=async id=>{
+      const parameter=m.parameters.find(p=>p.id===id);
+      if(parameter){
+        await openParameter(parameter);
+        if(current() && selected===id) detail.scrollIntoView({block:'nearest'});
+      }
+    };
+    if(panel.dataset.focusParameter) panel.focusParameter(panel.dataset.focusParameter);
   }catch(e){ if(current()) status.textContent=e.message; }
 }
 

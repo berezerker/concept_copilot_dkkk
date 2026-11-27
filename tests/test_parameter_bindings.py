@@ -48,6 +48,7 @@ def test_parameter_bindings():
             assert client.post(route, json={**data, "query": old["id"]}).status_code == 400
             assert client.post(route, json={**data, "parameter_id": "missing"}).status_code == 400
             assert client.post(route, json=data).status_code == 200
+            assert client.post(route, json={"query": phrase, "file_hash": original.idx.file_hash}).status_code == 422
             restored = load(model, "identical-with-a-new-name.xlsx")
             assert resolve(restored, "   СТАВКА  НАЛОГА НА ПРИБЫЛЬ  ")["selected"]["id"] == target["id"]
             assert resolve(restored, old["id"])["selected"]["id"] == old["id"]

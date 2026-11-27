@@ -552,7 +552,7 @@ class BindingIn(BaseModel):
 
 class ParameterBindingIn(BaseModel):
     query: str = Field(min_length=1, max_length=160)
-    parameter_id: str | None = None
+    parameter_id: str | None
     file_hash: str
 
 

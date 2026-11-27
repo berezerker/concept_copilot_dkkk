@@ -205,6 +205,17 @@ def build(s) -> dict:
 def summary(manifest: dict) -> dict:
     """Компактная часть manifest для загрузки, UI и системного промпта."""
     factor_counts = Counter(p["factor"]["name"] for p in manifest["parameters"])
+    suggested = {}
+    candidates = sorted(
+        (p for p in manifest["parameters"] if p["active"] and p["impacts"] and p["factor"]["id"] != "scenario"),
+        key=lambda p: (-len(p["impacts"]), -p["fanout"]),
+    )
+    for parameter in candidates:
+        factor = parameter["factor"]["id"]
+        suggested.setdefault(factor, {"id": parameter["id"], "name": parameter["name"],
+                                      "ref": parameter["location"]["ref"]})
+        if len(suggested) >= 3:
+            break
     return {
         "schema_version": manifest["schema_version"], "model": manifest["model"],
         "readiness": manifest["readiness"],
@@ -215,6 +226,7 @@ def summary(manifest: dict) -> dict:
                          "confidence": m["confidence"]["identity"], "where": m["location"]["reported"],
                          "shock": m["shock"]["method"]} for m in manifest["metrics"][:15]],
         "factors": [{"name": name, "parameters": n} for name, n in factor_counts.most_common(15)],
+        "suggested_parameters": list(suggested.values()),
         "scenario_sets": manifest["scenario_sets"],
         "limitations": manifest["limitations"][:8],
     }
