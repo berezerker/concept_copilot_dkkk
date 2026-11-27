@@ -5,9 +5,12 @@ import json
 import math
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from app import config
 from app.agent.registry import TOOL_MAP
 from app.agent.session import Session
+from app.server import SESSIONS, app
 from app.workbook.periods import norm_period
 from app.workbook.transaction import same_values, split_ref
 
@@ -19,6 +22,35 @@ def _hash(path):
 
 def _log(**entry):
     print(json.dumps(entry, ensure_ascii=False), flush=True)
+
+
+def _verified_plan(session, payload):
+    base_url = f"/api/excel-scenarios/{session.id}"
+    client = TestClient(app)
+    SESSIONS[session.id] = session
+    try:
+        def post(suffix, data):
+            response = client.post(base_url + "/" + suffix, json=data)
+            assert response.status_code == 200, response.json()
+            return response.json()
+
+        before_prepare = session.engine.n_scen
+        preview = post("prepare", payload)
+        assert session.engine.n_scen == before_prepare, "Предпроверка запустила сценарий"
+        checked = post("execute", {"plan_id": preview["plan_id"], "compare_individual": True})
+        previous_count = session.engine.n_scen
+        expired = client.post(base_url + "/execute", json={"plan_id": preview["plan_id"]})
+        assert expired.status_code == 400 and session.engine.n_scen == previous_count
+        response = client.get(base_url, params={"plan_id": preview["plan_id"]})
+        assert response.status_code == 200, response.json()
+        recalled = response.json()
+        assert recalled["historical"] and not recalled["recalculated"]
+        assert recalled["combined"] == checked["combined"]
+        assert session.engine.n_scen == previous_count, "Чтение истории вызвало пересчёт"
+        return preview, checked
+    finally:
+        SESSIONS.pop(session.id, None)
+        client.close()
 
 
 def verify(session, metric, periods, drivers):
@@ -127,10 +159,8 @@ def verify(session, metric, periods, drivers):
                    for p in all_plans],
         "metrics": [{"metric": metric, "period": period} for period in targets],
     }
-    preview = TOOL_MAP["prepare_excel_scenario"]["fn"](session, payload, lambda *_: None)
+    preview, checked = _verified_plan(session, payload)
     assert preview["phase"] == "preflight" and preview["metrics"][0]["target"] == target_refs[0]
-    checked = TOOL_MAP["execute_excel_scenario"]["fn"](
-        session, {"plan_id": preview["plan_id"], "compare_individual": True}, lambda *_: None)
     assert checked["phase"] == "verified" and checked["rollback_verified"]
     assert len(checked["individual"]) == len(all_plans)
     for output, period in zip(checked["combined"]["metrics"], targets):

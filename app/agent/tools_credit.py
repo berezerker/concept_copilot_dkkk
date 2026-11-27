@@ -17,6 +17,7 @@ import math
 
 from ..workbook.card import numeric_years
 from ..workbook.periods import FREQ_N
+from ..workbook.transaction import RestorationError
 from .tools import METRIC_SCHEMA, SHOCK_SCHEMA, _metric_refs, rnd
 from .tools_ext import DRIVER_SCHEMA, OPS, RULE_SCHEMA, _agg, _base_series, _fy, _run, dlabel
 
@@ -247,6 +248,8 @@ def t_stress_pack(s, a, emit):
         emit("progress", {"text": f"Стресс-пакет {i + 1}/{len(scen)}: {name}"})
         try:
             ser, desc, notes = _run(s, shocks, mrefs)
+        except RestorationError:
+            raise
         except Exception as e:
             rows.append({"scenario": name, "kind": kind, "error": str(e)[:200]})
             continue

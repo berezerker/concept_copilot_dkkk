@@ -14,6 +14,7 @@ from ..workbook import semantics as sm
 from ..workbook.card import numeric_years
 from ..workbook.modelmap import is_scalar_row
 from ..workbook.modelmap import upstream_inputs  # noqa: F401
+from ..workbook.transaction import RestorationError
 from .tools import METRIC_SCHEMA, _metric_refs, rnd
 from .tools_ext import RULE_SCHEMA, _agg, _base_series, _fy, _run
 
@@ -120,10 +121,9 @@ def scan(s, metrics, hows, shock=10.0, level="factor", years=None, emit=None, co
         try:
             ov, _, _, _ = _build_overrides(s, shocks)
             vals, _ = s.engine.scenario(ov, watch, watch + creads)
+        except RestorationError:
+            raise
         except Exception as e:
-            from ..logbus import Cancelled
-            if isinstance(e, Cancelled):
-                raise
             if kind == "main":
                 for j in range(len(mrefs)):
                     per_metric[j].append({"id": k[1] or k[0], "factor": k[0], "name": _gname(s, k), "rows": len(rows),
@@ -362,7 +362,7 @@ def t_dependency_analysis(s, a, emit):
             for m in metrics]
     clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in metrics]
     import json as _json
-    ckey = _json.dumps([[m["sheet"], int(m["row"]), h] for m, h in zip(clean, hows)] + [shock, a.get("years"),
+    ckey = _json.dumps([[m["sheet"], int(m["row"]), h] for m, h in zip(clean, hows)] + ["verified_restore", shock, a.get("years"),
                        bool(a.get("couplings", True))], ensure_ascii=False)
     cache = s.sem.setdefault("deps_cache", {}) if s.sem is not None else {}
     if ckey in cache and not a.get("force"):

@@ -1,5 +1,6 @@
 """Разрешение целей, подготовка и выполнение проверяемого Excel-сценария."""
 from copy import deepcopy
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from ..workbook import cell_trace as cells
@@ -102,10 +103,33 @@ def execute_excel_scenario(s, args, emit):
            for ref in refs):
         raise RuntimeError("База после завершения серии отличается от плана")
     s.scenario_plans.pop(plan["plan_id"], None)
-    return {"plan_id": plan["plan_id"], "file_hash": plan["file_hash"], "phase": "verified",
-            "rollback_verified": True, "combined": result, "individual": individual,
-            "inputs": [{k: v for k, v in item.items() if k != "paths"} for item in plan["inputs"]],
-            "metrics": [{k: v for k, v in item.items() if k != "target_formula"} for item in plan["metrics"]]}
+    verified = {"plan_id": plan["plan_id"], "file_hash": plan["file_hash"], "phase": "verified",
+                "verified_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "rollback_verified": True, "combined": result, "individual": individual,
+                "inputs": [{k: v for k, v in item.items() if k != "paths"} for item in plan["inputs"]],
+                "metrics": [{k: v for k, v in item.items() if k != "target_formula"} for item in plan["metrics"]]}
+    history = s.verified_scenarios
+    if len(history) >= 20:
+        del history[next(iter(history))]
+    history[plan["plan_id"]] = deepcopy(verified)
+    return verified
+
+
+def get_verified_excel_scenario(s, args, emit):
+    """История подтверждённых результатов. Наличие записи не подтверждает живую базу."""
+    plan_id = args.get("plan_id")
+    history = s.verified_scenarios
+    if plan_id:
+        result = history.get(plan_id)
+        if not result:
+            raise ValueError("Сценарий не найден в истории текущей загрузки")
+        return {**deepcopy(result), "historical": True, "recalculated": False}
+    return {"historical": True, "scenarios": [
+        {"plan_id": key, "verified_at": item["verified_at"],
+         "inputs": [v["source"] for v in item["inputs"]],
+         "metrics": [v["target"] for v in item["metrics"]]}
+        for key, item in reversed(history.items())
+    ]}
 
 
 TOOLS_SCENARIO = [
@@ -132,4 +156,8 @@ TOOLS_SCENARIO = [
          "plan_id": {"type": "string"},
          "compare_individual": {"type": "boolean", "description": "Сначала измерить эффект каждого входа отдельно"},
      }, "required": ["plan_id"]}},
+    {"name": "get_verified_excel_scenario", "fn": get_verified_excel_scenario,
+     "description": "Найти подтверждённые результаты текущей загрузки без нового пересчёта. С plan_id читает "
+                    "конкретный результат и измеренные эффекты. Это исторический снимок, он не подтверждает текущую базу.",
+     "parameters": {"type": "object", "properties": {"plan_id": {"type": "string"}}}},
 ]

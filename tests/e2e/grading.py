@@ -97,12 +97,63 @@ def tools_check(called, expect):
     return {"ok": not miss, "missing": miss}
 
 
+def verified_scenario_check(expect, tools):
+    """Сверка исполнения с планом и фактическими значениями Excel."""
+    import math
+    prepared = {}
+    for tool in tools:
+        result = tool.get("result")
+        if not tool.get("ok") or not isinstance(result, dict):
+            continue
+        plan_id = result.get("plan_id")
+        if tool["name"] == "prepare_excel_scenario" and plan_id and result.get("phase") == "preflight":
+            prepared[plan_id] = result
+        if tool["name"] != "execute_excel_scenario" or plan_id not in prepared or result.get("phase") != "verified":
+            continue
+        plan = prepared[plan_id]
+        receipt = result.get("combined", {}).get("transaction", {})
+        if not result.get("rollback_verified") or receipt.get("status") != "verified" or receipt.get("restored") is not True:
+            continue
+        periods, shocks = expect["periods"], expect["shocks_per_period"]
+        inputs = plan["inputs"]
+        if len(inputs) != len(periods) * len(shocks) or len({i["source"] for i in inputs}) != len(inputs):
+            continue
+        if any(sorted(i["requested_pct"] for i in inputs if i["source_period"] == p) != sorted(shocks) for p in periods):
+            continue
+        labels = expect.get("driver_labels", {})
+        if any(labels.get(f"{i['requested_pct']:g}", "").casefold() not in i.get("source_label", "").casefold()
+               for i in inputs):
+            continue
+        actual = {i["ref"]: i["achieved_pct"] for i in result["combined"]["inputs"]}
+        if not all(i["source"] in actual and math.isclose(actual[i["source"]], i["requested_pct"], abs_tol=1e-8) for i in inputs):
+            continue
+        metrics = plan["metrics"]
+        refs = {m["target"] for m in metrics}
+        if expect.get("individual"):
+            single_refs = set()
+            for trial in result.get("individual", []):
+                if (len(trial["inputs"]) == 1 and trial["transaction"].get("status") == "verified"
+                        and trial["transaction"].get("restored") is True
+                        and refs == {m["ref"] for m in trial["metrics"]}):
+                    single_refs.add(trial["inputs"][0]["ref"])
+            if single_refs != {i["source"] for i in inputs}:
+                continue
+        if (len(metrics) == len(periods) and len(refs) == len(periods)
+                and {m["period"] for m in metrics} == set(periods)
+                and all(m["published_binding"] == expect["metric"] for m in metrics)
+                and refs == {m["ref"] for m in result["combined"]["metrics"]}):
+            return True
+    return False
+
+
 def deterministic(case, run):
     called = [t["name"] for t in run["tools"]]
     res = {"seconds": run["seconds"], "steps": len(called), "tool_errors": sum(1 for t in run["tools"] if not t["ok"]),
            "error": run.get("error")}
     if case.get("expect_tools"):
         res["tools"] = tools_check(called, case["expect_tools"])
+    if case.get("expect_verified_scenario"):
+        res["verified_scenario"] = verified_scenario_check(case["expect_verified_scenario"], run["tools"])
     if run.get("answer"):
         res["grounding"] = grounding(run["answer"], [t["result"] for t in run["tools"]], case.get("query", ""))
         res["cell_refs"] = cell_refs(run["answer"])
@@ -170,6 +221,8 @@ def verdict(det, jd):
         reasons.append(("FAIL", f"ошибка: {det['error'][:120]}"))
     if det.get("tools") and not det["tools"]["ok"]:
         reasons.append(("FAIL", f"не вызваны инструменты: {det['tools']['missing']}"))
+    if det.get("verified_scenario") is False:
+        reasons.append(("FAIL", "нет подтверждённого исполнения требуемого плана Excel"))
     g = (det.get("grounding") or {}).get("score")
     if g is not None and g < 0.7:
         reasons.append(("FAIL", f"обоснованность чисел {g:.0%}"))

@@ -449,6 +449,7 @@ def _verify_direct(s, e, notes):
     Один раз на показатель проверяем пересчётом: подменяем показатель на −10 % и смотрим, сдвинулись ли итоги,
     до которых он должен дойти. Не сдвинулись — строка справочная, шокируем через допущения. Итог запоминается."""
     from ..workbook import catalog as cg
+    from ..workbook.transaction import RestorationError
     if e.get("direct_verified") is not None or not s.engine_open:
         return "direct" if e.get("direct_verified", True) else "drivers"
     targets = [r for r in (e.get("reaches") or []) + ["ebitda", "net_income"] if r in s.catalog["concepts"] and r != e["id"]]
@@ -463,6 +464,8 @@ def _verify_direct(s, e, notes):
         got = _read_metrics(s.engine.scenario(ov, reads, reads)[0], mref)
         moved = [t_ for t_, b, g in zip(targets, base, got)
                  if any(b.get(y) is not None and g.get(y) is not None and abs(g[y] - b[y]) > 1e-6 * max(abs(b[y]), 1e-9) for y in b)]
+    except RestorationError:
+        raise
     except Exception:
         return "direct"                       # проверить не удалось — остаёмся при выводе по графу
     e["direct_verified"] = bool(moved)

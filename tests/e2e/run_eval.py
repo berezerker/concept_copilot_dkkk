@@ -255,7 +255,9 @@ def main(argv=None):
             results.append({"model": mname, "case": case["id"], "kind": case["kind"], "status": status, "reasons": reasons,
                             "det": det, "judge": jd, "answer": run["answer"], "error": run["error"], "traceback": tb,
                             "tools": [{k: t[k] for k in ("name", "args", "ok", "seconds")} | (
-                                {"error": t["result"]} if not t["ok"] else {}) for t in rec.tools]})
+                                {"error": t["result"]} if not t["ok"] else
+                                {"result": t["result"]} if t["name"] in ("prepare_excel_scenario", "execute_excel_scenario")
+                                else {}) for t in rec.tools]})
             write_report(out_dir, results, a)          # после каждого кейса — отчёт не теряется при остановке
         try:
             s.engine.close()

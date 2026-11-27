@@ -8,6 +8,7 @@ import statistics
 from ..workbook.card import numeric_years
 from ..workbook.index import col_index
 from ..workbook.periods import norm_period
+from ..workbook.transaction import RestorationError
 from ..workbook.modelmap import audit, build_map, explain_cell, is_scalar_row, upstream_inputs
 from ..workbook import semantics as sm
 from .tools import (METRIC_SCHEMA, SHOCK_SCHEMA, _build_overrides, _metric_refs, _read_metrics, norm, rnd)
@@ -174,7 +175,9 @@ def t_find_drivers(s, a, emit):
         emit("progress", {"text": f"Драйвер {i + 1}/{len(cands)}: {u['sheet']}!{u['row']} «{u['label'][:40]}»"})
         try:
             ser, _, _ = _run(s, [{"sheet": u["sheet"], "row": u["row"], "op": "pct", "value": -shock}], mrefs)
-        except Exception as e:  # noqa — строка без лет и т.п.
+        except RestorationError:
+            raise
+        except Exception:  # строка без лет и т.п.
             continue
         v, vy = _agg(ser[0], how, year, _fy(s, a))
         if v is None or b0 is None:
@@ -272,6 +275,8 @@ def t_headroom(s, a, emit):
         for lo, hi in ((lo_b, 0.0), (0.0, hi_b)):
             try:
                 x, flo, fhi = _seek(s, drv, mrefs, how, a.get("year"), thr, lo, hi, min_year=_fy(s, a))
+            except RestorationError:
+                raise
             except Exception as e:
                 best = {"driver": label, "error": str(e)[:200]}
                 break
