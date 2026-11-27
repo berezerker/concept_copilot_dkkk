@@ -103,6 +103,7 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
             ok = True
             key = json.dumps(c.arguments, sort_keys=True, ensure_ascii=False)
             retry_of = None
+            execution = None
             try:
                 if tool is None:
                     raise ValueError(f"Нет инструмента {c.name}")
@@ -117,14 +118,16 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                 with wait_lock(session.lock, emit, session.id):
                     engine = getattr(session, "engine", None)
                     seq = getattr(engine, "n_scen", 0)
-                    result = tool["fn"](session, args, emit)
+                    try:
+                        result = tool["fn"](session, args, emit)
+                    finally:
+                        receipts = [r for r in getattr(engine, "transactions", []) if r["sequence"] > seq]
+                        if receipts:
+                            execution = {"scenarios": getattr(engine, "n_scen", 0) - seq,
+                                         "recent_transactions": receipts[-5:]}
                     if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
                         ok = False
-                    receipts = [r for r in getattr(engine, "transactions", []) if r["sequence"] > seq]
-                    if receipts and isinstance(result, dict):
-                        result = dict(result, execution={"scenarios": getattr(engine, "n_scen", 0) - seq,
-                                                       "recent_transactions": receipts[-5:]})
-                    if receipts and getattr(engine, "_tainted", False):
+                    if execution and getattr(engine, "_tainted", False):
                         raise RuntimeError("Excel не восстановлен; результат инструмента нельзя использовать")
             except Exception as e:
                 from ..logbus import Cancelled
@@ -146,7 +149,12 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                                   "error": str(result.get("error") or "Инструмент не подтвердил выполнение")}
                 result = dict(result, failed_call_id=c.id,
                               recovery="Повтори тот же вызов или передай retry_of с этим id при исправлении аргументов")
-            session.evidence.append({"id": c.id, "tool": c.name, "ok": ok})
+            evidence = {"id": c.id, "tool": c.name, "ok": ok}
+            if execution:
+                evidence["execution"] = execution
+                if isinstance(result, dict):
+                    result = dict(result, execution=execution)
+            session.evidence.append(evidence)
             ui_result = result if len(json.dumps(result, ensure_ascii=False, default=str)) <= 20000 else _short(result, 20000)
             emit("tool_end", {"id": c.id, "name": c.name, "ok": ok, "seconds": round(time.time() - t1, 1),
                               "result": ui_result})

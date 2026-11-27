@@ -121,8 +121,29 @@ def verify(session, metric, periods, drivers):
     assert same_values(engine.read([p["source"] for p in all_plans]),
                        [[[p["source_before"]]] for p in all_plans], tol=0), "Входы не восстановлены после run_stress"
     _log(case="Инструмент агента run_stress", metrics=actual, restored=True)
+
+    payload = {
+        "shocks": [{"source": p["source"], "source_period": p["source_period"], "pct": p["requested_pct"]}
+                   for p in all_plans],
+        "metrics": [{"metric": metric, "period": period} for period in targets],
+    }
+    preview = TOOL_MAP["prepare_excel_scenario"]["fn"](session, payload, lambda *_: None)
+    assert preview["phase"] == "preflight" and preview["metrics"][0]["target"] == target_refs[0]
+    checked = TOOL_MAP["execute_excel_scenario"]["fn"](
+        session, {"plan_id": preview["plan_id"], "compare_individual": True}, lambda *_: None)
+    assert checked["phase"] == "verified" and checked["rollback_verified"]
+    assert len(checked["individual"]) == len(all_plans)
+    for output, period in zip(checked["combined"]["metrics"], targets):
+        assert output["ref"] == targets[period]
+        assert math.isclose(output["after"], actual[period], rel_tol=1e-6, abs_tol=1e-6), period
+    for entry, item in zip(checked["combined"]["inputs"], all_plans):
+        assert entry["ref"] == item["source"]
+        assert math.isclose(entry["achieved_pct"], item["requested_pct"], abs_tol=1e-8)
+    assert same_values(engine.read(target_refs), metric_baseline), "База изменилась после проверенного плана"
+    assert preview["plan_id"] not in session.scenario_plans
+    _log(case="Проверенный план Excel", inputs=len(all_plans), outputs=len(targets), restored=True)
     return {"targets": targets, "drivers": len(all_plans), "individual_trials": trials,
-            "joint_trials": len(periods) + 3}
+            "joint_trials": len(periods) + 4, "checked_individual": len(all_plans)}
 
 
 def main():

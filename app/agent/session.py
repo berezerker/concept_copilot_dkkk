@@ -27,6 +27,7 @@ class Session:
         self.lock = threading.Lock()
         self.base_cache = {}       # ref -> значения базы после сходимости
         self.results = []          # результаты стресс-прогонов (для выгрузки)
+        self.scenario_plans = {}   # проверенные планы текущей загрузки
         self.sem = None            # смысловой слой: паспорт строк и факторы (workbook/semantics.py)
         self.catalog = None        # справочник модели: показатели, где считаются, как шокируются (workbook/catalog.py)
         self.manifest = None       # единый паспорт модели для агента, UI и preflight
@@ -34,6 +35,7 @@ class Session:
         self.client = None         # LLM текущего хода (для эксперта и заключения)
 
     def load(self, src_path: str, filename: str, cache_dir: str, engine_kind: str | None, progress=None):
+        self.scenario_plans.clear()
         self.engine_open = False
         self.engine_error = None
         dst = os.path.join(self.workdir, os.path.basename(filename))

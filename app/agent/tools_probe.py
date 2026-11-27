@@ -28,9 +28,7 @@ def _target(s, args):
     return (sheet, row, matching[0]), entry
 
 
-def inspect_cell_stress(s, args, emit):
-    """Без записи: адрес результата, цепочка и кандидаты либо точный план воздействия."""
-    target, binding = _target(s, args)
+def describe_target(s, target, binding=None):
     dst = cells.ref_for(target)
     row = cells.row_info(s.idx, target)
     period = cells.period_at(s.idx, target)
@@ -41,40 +39,63 @@ def inspect_cell_stress(s, args, emit):
     result = {"file_hash": s.idx.file_hash, "target": dst, "target_label": row.label,
               "target_formula": row.formulas.get(target[2]), "period": str(period) if period is not None else None,
               "target_unit": display_unit(kind, row.unit),
-              "published_binding": args.get("metric"), "method": "input_cell_pct"}
+              "published_binding": binding["id"] if binding else None, "method": "input_cell_pct"}
     if binding:
         result["binding_confirmed"] = binding["match"] == "pinned"
         result["binding_alternatives"] = [f"{x['sheet']}!{x['row']}" for x in binding.get("alternatives", [])]
-    if not args.get("source"):
-        requested_period = args.get("source_period")
-        source_period = norm_period(requested_period) if requested_period else None
-        result["trace"] = cells.trace(s.idx, target, query=args.get("query") or "", source_period=source_period)
-        return result
+    return result
+
+
+def resolve_input(s, args):
     source = cells.cell(s.idx, args["source"])
     ri = cells.row_info(s.idx, source)
-    if source == target or source[2] in ri.formulas or not cells.numeric(ri.values.get(source[2])):
+    if source[2] in ri.formulas or not cells.numeric(ri.values.get(source[2])):
         raise ValueError("Драйвер должен быть отдельной ячейкой с введённым числом")
     if source[0] in s.idx.inactive:
         raise ValueError("Драйвер находится в неактивном наборе допущений")
     pct = args.get("pct")
     if not cells.numeric(pct) or pct == 0:
         raise ValueError("Укажите ненулевое конечное изменение в процентах")
-    src = cells.ref_for(source)
     source_period = cells.period_at(s.idx, source)
     if args.get("source_period") and norm_period(args["source_period"]) != source_period:
         raise ValueError("Выбранная ячейка не соответствует указанному периоду входа")
-    s.require_engine()
-    if s.engine.name != "excel":
-        raise ValueError("Для проверяемого сценария требуется Excel")
-    a, b = (block[0][0] for block in s.engine.read([src, dst]))
-    if not (cells.numeric(a) and cells.numeric(b)) or a == 0:
-        raise ValueError("Нет числовой базы для результата или процентного шока драйвера")
+    return source, {"source": cells.ref_for(source), "source_label": ri.label, "source_unit": ri.unit, "requested_pct": pct,
+                    "source_period": str(source_period) if source_period is not None else None}
+
+
+def proposed_value(a, pct):
+    if not cells.numeric(a) or a == 0:
+        raise ValueError("Нет ненулевой числовой базы для процентного шока драйвера")
     proposed = a * (1 + pct / 100)
     if not cells.numeric(proposed) or proposed == a:
         raise ValueError("Шок не задаёт нового конечного числового значения")
-    result.update(source=src, source_label=ri.label, source_before=a, source_proposed=proposed,
-                  source_period=str(source_period) if source_period is not None else None,
-                  target_before=b, requested_pct=pct, trace=cells.trace(s.idx, target, source))
+    return proposed
+
+
+def require_excel(s):
+    s.require_engine()
+    if s.engine.name != "excel":
+        raise ValueError("Для проверяемого сценария требуется Excel")
+
+
+def inspect_cell_stress(s, args, emit):
+    """Без записи: адрес результата, цепочка и кандидаты либо точный план воздействия."""
+    target, binding = _target(s, args)
+    result = describe_target(s, target, binding)
+    if not args.get("source"):
+        requested_period = args.get("source_period")
+        source_period = norm_period(requested_period) if requested_period else None
+        result["trace"] = cells.trace(s.idx, target, query=args.get("query") or "", source_period=source_period)
+        return result
+    source, detail = resolve_input(s, args)
+    if source == target:
+        raise ValueError("Драйвер должен отличаться от результата")
+    require_excel(s)
+    a, b = (block[0][0] for block in s.engine.read([detail["source"], result["target"]]))
+    if not cells.numeric(b):
+        raise ValueError("Нет числовой базы для результата")
+    result.update(detail, source_before=a, source_proposed=proposed_value(a, detail["requested_pct"]),
+                  target_before=b, trace=cells.trace(s.idx, target, source))
     return result
 
 

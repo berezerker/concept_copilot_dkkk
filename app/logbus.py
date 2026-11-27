@@ -104,13 +104,13 @@ class EngineProxy:
             BUS.log(f"чтение {len(refs)} диапазонов — {dt:.2f} с", "engine", sid=self._sid)
         return res
 
-    def scenario(self, overrides, watch, reads):
+    def scenario(self, overrides, watch, reads, **kwargs):
         BUS.check(self._sid)
         self.n_scen += 1
         cells = sum(len(o["values"]) * (len(o["values"][0]) if o["values"] else 0) for o in overrides)
         t0 = time.time()
         try:
-            res, iters = self._e.scenario(overrides, watch, reads)
+            res, iters = self._e.scenario(overrides, watch, reads, **kwargs)
         finally:
             receipt = dict(getattr(self._e, "last_transaction", {}) or {})
             receipt.update(sequence=self.n_scen, engine=self.name)

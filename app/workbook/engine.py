@@ -572,11 +572,11 @@ class ExcelEngine(CalcEngine):
                 out.append({"ref": f"{sheet}!{c1}{a}:{c2}{b}", "values": rows})
         return out
 
-    def _scenario(self, overrides, watch, reads):
+    def _scenario(self, overrides, watch, reads, expected_watch=None):
         import time
+        self.last_transaction = {"status": "preflight", "restored": False}
         if getattr(self, "_tainted", False):
             raise RestorationError("Восстановление книги не подтверждено. Загрузите модель заново.")
-        self.last_transaction = {"status": "preflight", "restored": False}
         preflight = validate_overrides(overrides)
         # Свежий снимок: Excel может быть изменён пользователем между сценариями.
         self._box_cache = {}
@@ -591,6 +591,10 @@ class ExcelEngine(CalcEngine):
         watch = list(dict.fromkeys(list(watch) + list(reads)))
         self._converge(watch)
         baseline = self._read_raw(watch)
+        if expected_watch is not None:
+            for ref, value in zip(watch, baseline):
+                if ref in expected_watch and not same_values(value, expected_watch[ref]):
+                    raise ValueError(f"{ref}: база изменилась после предпроверки. Подготовьте сценарий заново.")
         saved = []
         self._dirty = None
         T = {"save": 0.0, "write": 0.0, "calc": 0.0, "read": 0.0, "restore": 0.0}
@@ -784,8 +788,8 @@ class ExcelEngine(CalcEngine):
     def read(self, refs):
         return self._retry(self._read, list(refs))
 
-    def scenario(self, overrides, watch, reads):
-        return self._retry(self._scenario, overrides, watch, reads)
+    def scenario(self, overrides, watch, reads, *, expected_watch=None):
+        return self._retry(self._scenario, overrides, watch, reads, expected_watch)
 
     def close(self):
         try:

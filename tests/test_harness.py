@@ -108,6 +108,8 @@ class Harness(unittest.TestCase):
         self.assertFalse(answer["complete"])
         self.assertIn("Excel не восстановлен", answer["text"])
         self.assertNotIn("update_plan", answer["text"])
+        failed = next(row for row in s.evidence if not row["ok"])
+        self.assertEqual(failed["execution"]["recent_transactions"][0]["status"], "restore_failed")
 
 
 if __name__ == "__main__":
