@@ -665,6 +665,13 @@ async function openModelExplorer(){
         <label>Фактор <select data-factor><option value="">Все</option></select></label>
         <label>Блок <select data-block><option value="">Все</option></select></label>
       </div>
+      <form data-correction class="scenario-results" hidden>
+        <label>Запрос, который нужно исправить <input data-binding-query required maxlength="160"></label>
+        <p class="kv" data-binding-target>Выберите правильный параметр из списка.</p>
+        <div class="scenario-actions"><button type="submit" class="btn" data-save-binding>Сохранить привязку</button>
+          <button type="button" class="btn" data-cancel-binding>Отмена</button></div>
+      </form>
+      <p class="kv" data-binding-status role="status"></p>
       <p data-count class="kv" aria-live="polite"></p><div class="scenario-actions" data-parameters></div>
       <div data-parameter aria-live="polite"></div>`;
     find('[data-bindings]').onclick=openBindingReview;
@@ -678,16 +685,62 @@ async function openModelExplorer(){
     }
     const query=find('[data-query]'), factor=find('[data-factor]'), block=find('[data-block]');
     const list=find('[data-parameters]'), detail=find('[data-parameter]'), count=find('[data-count]');
+    const editor=find('[data-correction]'), bindingQuery=find('[data-binding-query]'), saveBinding=find('[data-save-binding]');
+    const bindingStatus=find('[data-binding-status]');
+    const queryKey=text=>text.trim().toLowerCase().replaceAll('ё','е').replace(/\s+/g,' ');
     const sortedUnique=values=>[...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'));
     for(const name of sortedUnique(m.parameters.map(p=>p.factor.name))) factor.add(new Option(name,name));
     let selected=null, cap=30;
+    let bindings=m.user_overrides?.parameters||[], correction=null, saving=false;
+    function correctionTarget(){
+      return correction && m.parameters.find(p=>p.id===selected && p.id!==correction && p.active);
+    }
+    function syncCorrection(){
+      editor.hidden=!correction;
+      const target=correctionTarget();
+      find('[data-binding-target]').textContent=target
+        ? 'Выбран '+target.name+' · '+target.location.ref
+        : 'Выберите правильный параметр из списка.';
+      saveBinding.disabled=saving || !target;
+    }
+    async function saveParameterBinding(phrase, parameter){
+      if(saving || !phrase.trim()) return;
+      saving=true; syncCorrection();
+      bindingStatus.textContent='Сохраняю привязку…';
+      try{
+        const result=await workbookRequest('/api/manifest/'+sid+'/parameter-bindings',{
+          query:phrase, parameter_id:parameter?.id??null, file_hash:m.model.file_hash
+        });
+        if(!current() || !panel.isConnected) return;
+        bindings=result.bindings;
+        correction=null;
+        bindingStatus.textContent=parameter
+          ? 'Запрос «'+phrase+'» закреплён за '+parameter.location.ref+'.'
+          : 'Привязка запроса «'+phrase+'» снята.';
+        render();
+        const shown=m.parameters.find(p=>p.id===selected);
+        if(shown) openParameter(shown);
+      }catch(e){
+        if(current() && panel.isConnected) bindingStatus.textContent=e.message;
+      }finally{
+        saving=false; syncCorrection();
+      }
+    }
+    editor.onsubmit=e=>{
+      e.preventDefault();
+      const target=correctionTarget();
+      if(target) saveParameterBinding(bindingQuery.value,target);
+    };
+    find('[data-cancel-binding]').onclick=()=>{ correction=null; syncCorrection(); };
     async function openParameter(parameter){
       selected=parameter.id;
+      syncCorrection();
       detail.textContent='Читаю ячейки…';
       try{
         const data=await workbookRequest(`/api/manifest/${sid}/parameters/${encodeURIComponent(parameter.id)}`);
         if(!current() || selected!==parameter.id) return;
         const p=data.parameter;
+        const aliases=bindings.filter(x=>x.parameter_id===p.id);
         detail.innerHTML=`<section class="scenario-results"><h4>${esc(p.name)}</h4>
           <p class="kv">${esc(p.factor.name)} · ${esc(p.location.block||p.location.sheet)} ·
           ${p.active?'Лист участвует в текущем наборе':'Неактивный набор допущений'}</p>
@@ -701,6 +754,8 @@ async function openModelExplorer(){
             x.metrics.map(v=>esc(v.ref)+' Δ '+scenarioNumber(v.delta)).join(', ')+'</li>').join('')}</ul></details>`:''}
           <label>Входная ячейка при загрузке <select data-cell></select></label>
           <button type="button" class="btn" data-add-stress>Добавить в стресс</button>
+          <button type="button" class="btn" data-correct>Это не тот параметр</button>
+          ${aliases.length?`<ul>${aliases.map((alias,i)=>'<li>Запрос «'+esc(alias.query)+'» <button type="button" class="btn" data-unbind="'+i+'">Снять привязку</button></li>').join('')}</ul>`:''}
           ${data.input_count>data.inputs.length?'<p class="kv">Показаны первые '+data.inputs.length+' ячеек.</p>':''}</section>`;
         const cells=detail.querySelector('[data-cell]');
         for(const [i,c] of data.inputs.entries()) cells.add(new Option(
@@ -711,13 +766,24 @@ async function openModelExplorer(){
           const cell=data.inputs[Number(cells.value)];
           if(cell) openScenarioBuilder({source:cell.ref,period:cell.period});
         };
+        detail.querySelector('[data-correct]').onclick=()=>{
+          correction=p.id;
+          bindingQuery.value=(query.value.trim() || p.name).slice(0,160);
+          query.value=''; factor.value=''; factor.onchange();
+          query.focus();
+        };
+        for(const button of detail.querySelectorAll('[data-unbind]')){
+          button.onclick=()=>saveParameterBinding(aliases[Number(button.dataset.unbind)].query,null);
+        }
       }catch(e){ if(current() && selected===parameter.id) detail.textContent=e.message; }
     }
     function render(){
-      const needle=query.value.trim().toLocaleLowerCase('ru');
+      const needle=queryKey(query.value);
+      const saved=bindings.find(x=>queryKey(x.query)===needle);
       const visible=m.parameters.filter(p=>(!factor.value || p.factor.name===factor.value)
         && (!block.value || p.location.block===block.value)
-        && [p.name,p.location.label,p.location.block,p.location.sheet].join(' ').toLocaleLowerCase('ru').includes(needle));
+        && (saved?p.id===saved.parameter_id
+          :queryKey([p.name,p.location.label,p.location.block,p.location.sheet].join(' ')).includes(needle)));
       count.textContent=`Параметров найдено ${visible.length} из ${m.parameters.length}`;
       list.replaceChildren(...visible.slice(0,cap).map(p=>{
         const b=el('<button type="button" class="btn"></button>');
@@ -732,7 +798,7 @@ async function openModelExplorer(){
       }
     }
     function reset(){
-      cap=30; selected=null; detail.replaceChildren(); render();
+      cap=30; selected=null; detail.replaceChildren(); syncCorrection(); render();
     }
     factor.onchange=()=>{
       const values=m.parameters.filter(p=>!factor.value || p.factor.name===factor.value).map(p=>p.location.block);

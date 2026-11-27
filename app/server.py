@@ -550,6 +550,39 @@ class BindingIn(BaseModel):
     file_hash: str
 
 
+class ParameterBindingIn(BaseModel):
+    query: str = Field(min_length=1, max_length=160)
+    parameter_id: str | None = None
+    file_hash: str
+
+
+@app.post("/api/manifest/{session_id}/parameter-bindings")
+def update_parameter_binding(session_id: str, req: ParameterBindingIn):
+    from .workbook import user_overrides
+
+    s = _session(session_id)
+    with s.lock:
+        if s.idx.file_hash != req.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте обзор модели заново.")
+        manifest = s.manifest or s.refresh_manifest()
+        parameter = None
+        if req.parameter_id is not None:
+            parameter = next((p for p in manifest["parameters"] if p["id"] == req.parameter_id and p["active"]), None)
+            if parameter is None:
+                raise HTTPException(400, "Выберите активный параметр из паспорта модели")
+            key = user_overrides.query_key(req.query)
+            identities = {identity for p in manifest["parameters"] for identity in (p["id"], p["location"]["ref"])}
+            identities.update(identity for m in manifest["metrics"] for identity in (m["id"], m["catalog_id"]))
+            if any(key == user_overrides.query_key(identity) for identity in identities):
+                raise HTTPException(400, "Для привязки введите название параметра словами")
+        try:
+            bindings = user_overrides.set_parameter(s, req.query, parameter)
+        except (OSError, ValueError) as e:
+            raise HTTPException(400, "Не удалось сохранить привязку. " + str(e)) from e
+        manifest["user_overrides"] = {"parameters": bindings}
+        return {"bindings": bindings}
+
+
 @app.post("/api/manifest/{session_id}/binding")
 def confirm_binding(session_id: str, req: BindingIn):
     from .agent.tools import t_catalog_set

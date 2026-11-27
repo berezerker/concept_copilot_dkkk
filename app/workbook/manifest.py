@@ -18,6 +18,7 @@ from collections import Counter
 
 from . import catalog as cg
 from . import params as pr
+from . import user_overrides
 from .card_utils import numeric_years
 from .modelmap import build_map
 
@@ -178,6 +179,11 @@ def build(s) -> dict:
         limitations.append({"code": "missing_catalog_metrics", "severity": "info",
                             "message": "Не найдены типовые показатели: " + ", ".join(
                                 cg.BY_ID[x]["name"] for x in s.catalog["missing"] if x in cg.BY_ID)})
+    try:
+        bindings = list(user_overrides.load(s).values())
+    except ValueError as e:
+        bindings = []
+        limitations.append({"code": "unreadable_parameter_bindings", "severity": "warning", "message": str(e)})
     readiness = _readiness(s, metrics, parameters, limitations)
     return {
         "schema_version": MANIFEST_VERSION,
@@ -186,6 +192,7 @@ def build(s) -> dict:
                   "forecast_start": s.forecast_start, "iterative_calculation": bool(s.idx.iterate)},
         "readiness": readiness, "zones": zones,
         "edges": model_map["edges"], "metrics": metrics, "parameters": parameters,
+        "user_overrides": {"parameters": bindings},
         "scenario_sets": scenario_sets,
         "switches": [{"id": f"switch:{x['sheet']}!{x['row']}", **x} for x in s.card.get("switches") or []],
         "limitations": limitations,
@@ -259,7 +266,7 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
         for score, m in _metric_candidates(manifest, query):
             candidates.append({"score": round(score, 2), **m})
     if kind in ("auto", "parameter"):
-        hits, _ = pr.search(s, query, limit=max(2, len(manifest["parameters"])))
+        hits, _ = pr.search(s, query, limit=max(2, len(manifest["parameters"])), use_bindings=False)
         by_ref = {p["location"]["ref"]: p for p in manifest["parameters"]}
         for hit in hits:
             p = by_ref.get(hit["ref"])
@@ -276,6 +283,14 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
                 query.casefold() == str((x.get("location") or {}).get("ref", "")).casefold()]
     exact = identity or [x for x in candidates if qnorm == _norm(x.get("name") or "") or
              qnorm == _norm((x.get("location") or {}).get("label") or "")]
+    binding = None
+    if not identity and kind != "metric":
+        binding = user_overrides.parameter_binding(s, query)
+        if binding:
+            exact = [{**p, "score": 100.0} for p in manifest["parameters"]
+                     if p["id"] == binding["parameter_id"] and p["active"]
+                     and p["location"]["sheet"] not in s.idx.inactive]
+            candidates = exact
     candidates.sort(key=lambda x: -x["score"])
     selected = exact[0] if exact else (candidates[0] if candidates else None)
     if exact:
@@ -288,6 +303,8 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
         gap = candidates[0]["score"] - candidates[1]["score"]
         status = "resolved" if gap >= 2.0 else "ambiguous"
     warnings = []
+    if binding and selected is None:
+        warnings.append("Закреплённый параметр недоступен. Проверьте привязку в обзоре модели.")
     if selected and intent == "shock":
         if selected["kind"] == "metric" and selected.get("metric_kind") == "ratio":
             warnings.append("Коэффициент нельзя задавать напрямую; нужно менять его драйверы")
@@ -302,6 +319,7 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
         "query": query, "kind": kind, "intent": intent, "status": status,
         "selected": selected if status == "resolved" else None,
         "candidates": candidates[:limit], "warnings": warnings,
+        **({"user_override": binding} if binding else {}),
         "next_action": ("build_scenario" if intent == "shock" else "read_target") if status == "resolved" and not warnings else
                        ("inspect_and_confirm" if candidates else "search_model"),
         "note": "resolved означает однозначное сопоставление, но не заменяет preflight и проверку пересчётом",

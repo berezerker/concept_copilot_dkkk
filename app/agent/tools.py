@@ -166,12 +166,19 @@ def t_get_model_manifest(s, a, emit):
                     or query in norm(x["location"]["label"])]
         payload = {"readiness": manifest["readiness"], "metrics": rows[:limit], "found": len(rows)}
     elif section == "parameters":
+        from ..workbook.user_overrides import parameter_binding
+
         rows = manifest["parameters"]
-        if query:
+        binding = parameter_binding(s, query)
+        if binding:
+            rows = [x for x in rows if x["id"] == binding["parameter_id"] and x["active"]]
+        elif query:
             rows = [x for x in rows if any(query in norm(v) for v in
                     (x["name"], x["location"]["label"], x["location"]["block"], x["factor"]["name"],
                      x["location"]["ref"]))]
         payload = {"readiness": manifest["readiness"], "parameters": rows[:limit], "found": len(rows)}
+        if binding:
+            payload["user_override"] = binding
     elif section == "zones":
         payload = {"zones": manifest["zones"][:limit], "edges": manifest["edges"][:limit],
                    "found": len(manifest["zones"]), "readiness": manifest["readiness"]}
@@ -1039,7 +1046,8 @@ def t_find_parameters(s, a, emit):
     hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit)
     out = [{"ref": h["ref"], "sheet": h["sheet"], "row": h["row"], "name": h["name"], "label": h["label"][:90], "block": h["block"][:90] or None,
             "unit": h["unit"] or None, "factor": h["factor"], "sub": h["sub"], "scalar": h["scalar"] or None, "values": h["values"],
-            "influences": h["influences"] or None, "fanout": h["fanout"], "meaning": h["desc"] or None} for h in hits]
+            "influences": h["influences"] or None, "fanout": h["fanout"], "meaning": h["desc"] or None,
+            **({"user_override": h["user_override"]} if "user_override" in h else {})} for h in hits]
     payload = {"query": a.get("query") or "", "found": total, "parameters": out, "overview": pr.overview(s)}
     emit("params", payload)
     res = {"found": total, "parameters": out,

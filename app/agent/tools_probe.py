@@ -1,5 +1,6 @@
 """Проверка конкретного допущения и результата в рабочей копии Excel."""
 from ..workbook import cell_trace as cells
+from ..workbook import manifest, user_overrides
 from ..workbook.periods import norm_period
 
 
@@ -8,8 +9,6 @@ def _target(s, args):
         if args.get("metric") or args.get("period"):
             raise ValueError("Укажите адрес результата или показатель и период")
         return cells.cell(s.idx, args["target"]), None
-    from ..workbook import manifest
-
     if not args.get("metric") or not args.get("period"):
         raise ValueError("Укажите адрес результата или показатель и точный период")
     resolved = manifest.resolve(s, args["metric"], kind="metric")
@@ -85,7 +84,18 @@ def inspect_cell_stress(s, args, emit):
     if not args.get("source"):
         requested_period = args.get("source_period")
         source_period = norm_period(requested_period) if requested_period else None
-        result["trace"] = cells.trace(s.idx, target, query=args.get("query") or "", source_period=source_period)
+        query = args.get("query") or ""
+        binding = user_overrides.parameter_binding(s, query)
+        source_row = None
+        if binding:
+            selected = manifest.resolve(s, binding["parameter_id"], kind="parameter")["selected"]
+            if not selected or selected["id"] != binding["parameter_id"] or not selected["active"]:
+                raise ValueError("Закреплённый параметр недоступен. Проверьте привязку в обзоре модели.")
+            loc = selected["location"]
+            source_row = (loc["sheet"], loc["row"])
+            result["user_override"] = binding
+        result["trace"] = cells.trace(s.idx, target, query="" if binding else query, source_period=source_period,
+                                      source_row=source_row)
         return result
     source, detail = resolve_input(s, args)
     if source == target:
