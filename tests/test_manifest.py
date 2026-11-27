@@ -8,7 +8,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.agent.prompts import system_prompt
 from app.agent.registry import TOOL_MAP
+from app.agent.tools_probe import _target
 from app.agent.tools_scenario import _scenario_input
+from app.workbook.cell_trace import ref_for
 from app.workbook import manifest as mf
 from tests.foreign_model import make_foreign_session
 
@@ -35,6 +37,14 @@ def check_scenario_parameter(s):
     with patch.dict(s.idx.row("База", 2).formulas, {5: "=D2*1.03"}):
         with check.assertRaisesRegex(ValueError, "нет единственной ячейки"):
             _scenario_input(s, args)
+    output = {"metric": "metric:ebitda", "period": "2026"}
+    node, entry = _target(s, output)
+    ref = ref_for(node)
+    assert _target(s, {**output, "target": ref}) == (node, entry)
+    with check.assertRaisesRegex(ValueError, "не соответствует периоду"):
+        _target(s, {**output, "target": ref, "period": "2027"})
+    with check.assertRaisesRegex(ValueError, "не соответствует привязке"):
+        _target(s, {**output, "target": ref_for((node[0], node[1] + 1, node[2]))})
 
 
 def test_manifest():
