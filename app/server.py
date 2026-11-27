@@ -599,7 +599,8 @@ def cell_stress(session_id: str, req: CellStressIn):
 
 
 class ScenarioShockIn(BaseModel):
-    source: str
+    source: str | None = None
+    parameter: str | None = None
     source_period: str | None = None
     pct: float
 
