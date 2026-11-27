@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from ..workbook import cell_trace as cells
+from ..workbook import manifest
+from ..workbook.periods import norm_period
 from ..workbook.transaction import same_values, validate_overrides
 from .tools_probe import _target, describe_target, proposed_value, require_excel, resolve_input
 
@@ -19,6 +21,34 @@ def _baseline(s, refs):
     return dict(zip(refs, values))
 
 
+def _scenario_input(s, args):
+    source, parameter = args.get("source"), args.get("parameter")
+    if bool(source) == bool(parameter):
+        raise ValueError("Укажите точный адрес входа или параметр паспорта и период входа")
+    if source:
+        return resolve_input(s, args)
+    if not args.get("source_period"):
+        raise ValueError("Для параметра паспорта укажите точный период входа или выберите ячейку по адресу")
+    period = norm_period(args["source_period"])
+    resolved = manifest.resolve(s, parameter, kind="parameter", intent="shock", limit=4)
+    if resolved["status"] != "resolved":
+        candidates = ", ".join(f"{item['location']['ref']} — {item['location']['label']}"
+                               for item in resolved["candidates"])
+        detail = f" Возможные строки: {candidates}." if candidates else ""
+        raise ValueError(f"Уточните параметр «{parameter}» из паспорта или укажите адрес ячейки.{detail}")
+    selected = resolved["selected"]
+    location = selected["location"]
+    sheet, row = location["sheet"], location["row"]
+    info = s.idx.row(sheet, row)
+    matching = [col for col, value in s.idx.sheet(sheet).years_for(row).items()
+                if value == period and col not in info.formulas and cells.numeric(info.values.get(col))]
+    if len(matching) != 1:
+        raise ValueError(f"{location['ref']}: в периоде {period} нет единственной ячейки с введённым числом. "
+                         "Укажите точный адрес входа.")
+    node, detail = resolve_input(s, {**args, "source": cells.ref_for((sheet, row, matching[0]))})
+    return node, {**detail, "parameter_id": selected["id"]}
+
+
 def prepare_excel_scenario(s, args, emit):
     """Разрешает весь сценарий и возвращает проверенный план. Записей в книгу нет."""
     shocks, metrics = args.get("shocks"), args.get("metrics")
@@ -27,7 +57,7 @@ def prepare_excel_scenario(s, args, emit):
         raise ValueError(f"Нужно от 1 до {LIMIT} входов и столько же контрольных ячеек")
     require_excel(s)
     resolved = [_target(s, item) for item in metrics]
-    inputs = [resolve_input(s, shock) for shock in shocks]
+    inputs = [_scenario_input(s, shock) for shock in shocks]
     outputs = [describe_target(s, *item) for item in resolved]
     source_refs = [detail["source"] for _, detail in inputs]
     target_refs = [detail["target"] for detail in outputs]
@@ -134,14 +164,15 @@ def get_verified_excel_scenario(s, args, emit):
 
 TOOLS_SCENARIO = [
     {"name": "prepare_excel_scenario", "fn": prepare_excel_scenario,
-     "description": "Разрешить и проверить до 8 точных входов и результатов. Возвращает plan_id, адреса, периоды, "
-                    "значения до записи и пути по формулам. При неоднозначности уточни выбор. Книга не меняется.",
+     "description": "Подготовить совместный шок до 8 входов. Принимает ячейки либо параметры из паспорта с периодами. "
+                    "Возвращает plan_id, точные адреса, базу и пути формул. Книга не меняется.",
      "parameters": {"type": "object", "properties": {
          "shocks": {"type": "array", "items": {"type": "object", "properties": {
              "source": {"type": "string", "description": "Адрес введённого числа: лист!A1"},
-             "source_period": {"type": "string", "description": "Точный период входа, если задан"},
+             "parameter": {"type": "string", "description": "ID или имя параметра паспорта вместо source"},
+             "source_period": {"type": "string", "description": "Точный период входа, обязателен с parameter"},
              "pct": {"type": "number", "description": "Относительный шок в процентах, не процентных пунктах"},
-         }, "required": ["source", "pct"]}},
+         }, "required": ["pct"]}},
          "metrics": {"type": "array", "items": {"type": "object", "properties": {
              "target": {"type": "string", "description": "Адрес результата: лист!A1"},
              "metric": {"type": "string", "description": "ID показателя паспорта вместо target"},

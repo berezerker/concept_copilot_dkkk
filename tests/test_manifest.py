@@ -1,11 +1,14 @@
 """Model Manifest: единый паспорт и детерминированное разрешение целей агента."""
 import os
 import sys
+from unittest import TestCase
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.agent.prompts import system_prompt
 from app.agent.registry import TOOL_MAP
+from app.agent.tools_scenario import _scenario_input
 from app.workbook import manifest as mf
 from tests.foreign_model import make_foreign_session
 
@@ -15,6 +18,23 @@ E = lambda k, d: None
 
 def call(s, name, args):
     return TOOL_MAP[name]["fn"](s, args, E)
+
+
+def check_scenario_parameter(s):
+    args = {"parameter": mf.parameter_id("База", 2), "source_period": "2026", "pct": -10}
+    _, detail = _scenario_input(s, args)
+    assert detail["source"] == "'База'!E2" and detail["parameter_id"] == args["parameter"]
+    check = TestCase()
+    with check.assertRaisesRegex(ValueError, "точный период входа"):
+        _scenario_input(s, {**args, "source_period": None})
+    with check.assertRaisesRegex(ValueError, "адрес входа или параметр"):
+        _scenario_input(s, {**args, "source": detail["source"]})
+    with patch.object(s.idx.sheet("База"), "years_for", return_value={4: 2026, 5: 2026}):
+        with check.assertRaisesRegex(ValueError, "нет единственной ячейки"):
+            _scenario_input(s, args)
+    with patch.dict(s.idx.row("База", 2).formulas, {5: "=D2*1.03"}):
+        with check.assertRaisesRegex(ValueError, "нет единственной ячейки"):
+            _scenario_input(s, args)
 
 
 def test_manifest():
@@ -65,7 +85,6 @@ def test_manifest():
         overrides, _, _, _ = _build_overrides(s, [{"target": param["selected"]["id"], "op": "pct", "value": 10}])
         assert overrides and "Параметры" in overrides[0]["ref"]
         # В смешанной строке параметра формула не должна попадать в запись шока.
-        from unittest.mock import patch
         from app.agent.tools import _shock_cols
         sh, ri, cols = _shock_cols(s, "База", 2, None)
         formula_col = sorted(cols)[1]
@@ -81,6 +100,7 @@ def test_manifest():
 
         prompt = system_prompt(s)
         assert "MODEL MANIFEST" in prompt and "resolve_target" in prompt
+        check_scenario_parameter(s)
     finally:
         s.close()
 

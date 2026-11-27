@@ -11,6 +11,8 @@ from app import config
 from app.agent.registry import TOOL_MAP
 from app.agent.session import Session
 from app.server import SESSIONS, app
+from app.workbook.cell_trace import cell
+from app.workbook.manifest import parameter_id
 from app.workbook.periods import norm_period
 from app.workbook.transaction import same_values, split_ref
 
@@ -24,7 +26,7 @@ def _log(**entry):
     print(json.dumps(entry, ensure_ascii=False), flush=True)
 
 
-def _verified_plan(session, payload):
+def _verified_plan(session, payload, parameter_shocks):
     base_url = f"/api/excel-scenarios/{session.id}"
     client = TestClient(app)
     SESSIONS[session.id] = session
@@ -35,8 +37,14 @@ def _verified_plan(session, payload):
             return response.json()
 
         before_prepare = session.engine.n_scen
-        preview = post("prepare", payload)
+        exact = post("prepare", payload)
+        preview = post("prepare", {**payload, "shocks": parameter_shocks})
         assert session.engine.n_scen == before_prepare, "Предпроверка запустила сценарий"
+        assert preview["metrics"] == exact["metrics"]
+        assert [item["parameter_id"] for item in preview["inputs"]] == [
+            shock["parameter"] for shock in parameter_shocks
+        ]
+        assert [{k: v for k, v in item.items() if k != "parameter_id"} for item in preview["inputs"]] == exact["inputs"]
         checked = post("execute", {"plan_id": preview["plan_id"], "compare_individual": True})
         previous_count = session.engine.n_scen
         expired = client.post(base_url + "/execute", json={"plan_id": preview["plan_id"]})
@@ -159,7 +167,12 @@ def verify(session, metric, periods, drivers):
                    for p in all_plans],
         "metrics": [{"metric": metric, "period": period} for period in targets],
     }
-    preview, checked = _verified_plan(session, payload)
+    parameter_shocks = []
+    for shock in payload["shocks"]:
+        sheet, row, _ = cell(session.idx, shock["source"])
+        parameter_shocks.append({"parameter": parameter_id(sheet, row), "source_period": shock["source_period"],
+                                 "pct": shock["pct"]})
+    preview, checked = _verified_plan(session, payload, parameter_shocks)
     assert preview["phase"] == "preflight" and preview["metrics"][0]["target"] == target_refs[0]
     assert checked["phase"] == "verified" and checked["rollback_verified"]
     assert len(checked["individual"]) == len(all_plans)
