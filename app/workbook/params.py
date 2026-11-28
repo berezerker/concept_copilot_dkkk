@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from .semantics import FACTORS
+from . import user_overrides
 
 _WORD = re.compile(r"[a-zа-я0-9]+")
 _STOP = {"на", "по", "для", "от", "за", "и", "в", "с", "the", "of", "for", "to", "in", "and", "при", "из", "к", "у", "до"}
@@ -98,9 +99,10 @@ def _index(s):
     return idx
 
 
-def search(s, query="", factor=None, sheet=None, limit=25, *, include_partial=False):
+def search(s, query="", factor=None, sheet=None, limit=25, *, use_bindings=True, include_partial=False):
     """Поиск параметров. Возвращает (найденные записи с баллом, сколько всего подошло).
     Запись подходит, если в ней нашлось не меньше половины слов запроса (точно, по началу слова или по синониму)."""
+    binding = user_overrides.parameter_binding(s, query) if use_bindings else None
     q = _tokens(query)
     qg = [_groups(t) for t in q]
     # О каком факторе сам запрос («цена на бензин» → цены реализации): записи этого фактора поднимаем выше,
@@ -114,6 +116,10 @@ def search(s, query="", factor=None, sheet=None, limit=25, *, include_partial=Fa
         if factor and factor not in (e["factor"], e["sub"]):
             continue
         if sheet and e["sheet"].lower() != str(sheet).lower():
+            continue
+        if binding:
+            if e["ref"] == binding["ref"] and e["sheet"] not in s.idx.inactive:
+                return [dict(e, score=100.0, user_override=binding)], 1
             continue
         if not q:
             hits.append((len(e["influences"]) * 10 + min(e["fanout"], 50) / 10, e, []))

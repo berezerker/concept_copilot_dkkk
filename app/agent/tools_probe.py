@@ -1,5 +1,6 @@
 """Проверка конкретного допущения и результата в рабочей копии Excel."""
 from ..workbook import cell_trace as cells
+from ..workbook import manifest, user_overrides
 from ..workbook.periods import norm_period
 
 
@@ -18,8 +19,6 @@ def _target(s, args):
     location = node[:2] if node else row_ref
     entry = None
     if metric:
-        from ..workbook import manifest
-
         resolved = manifest.resolve(s, metric, kind="metric")
         if resolved["status"] != "resolved":
             refs = ", ".join(m["id"] for m in resolved["candidates"])
@@ -79,8 +78,6 @@ def resolve_input_selector(s, args):
     period = norm_period(args["source_period"])
     parameter_id = None
     if parameter:
-        from ..workbook import manifest
-
         resolved = manifest.resolve(s, parameter, kind="parameter", intent="shock", limit=4)
         if resolved["status"] != "resolved":
             candidates = ", ".join(f"{item['location']['ref']} — {item['location']['label']}"
@@ -120,7 +117,18 @@ def inspect_cell_stress(s, args, emit):
     if not (args.get("source") or args.get("parameter")):
         requested_period = args.get("source_period")
         source_period = norm_period(requested_period) if requested_period else None
-        result["trace"] = cells.trace(s.idx, target, query=args.get("query") or "", source_period=source_period)
+        query = args.get("query") or ""
+        binding = user_overrides.parameter_binding(s, query)
+        source_row = None
+        if binding:
+            selected = manifest.resolve(s, binding["parameter_id"], kind="parameter")["selected"]
+            if not selected or selected["id"] != binding["parameter_id"] or not selected["active"]:
+                raise ValueError("Закреплённый параметр недоступен. Проверьте привязку в обзоре модели.")
+            loc = selected["location"]
+            source_row = (loc["sheet"], loc["row"])
+            result["user_override"] = binding
+        result["trace"] = cells.trace(s.idx, target, query="" if binding else query, source_period=source_period,
+                                      source_row=source_row)
         return result
     source, detail = resolve_input_selector(s, args)
     if source == target:

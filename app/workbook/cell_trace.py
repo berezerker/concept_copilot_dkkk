@@ -91,7 +91,7 @@ def period_at(idx, node):
     return idx.sheets[node[0]].years_for(node[1]).get(node[2])
 
 
-def trace(idx, target, source=None, limit=12000, candidates=12, query="", source_period=None):
+def trace(idx, target, source=None, limit=12000, candidates=12, query="", source_period=None, source_row=None):
     """BFS backwards from the exact target. Paths are static formula references."""
     parents = {target: None}
     queue = deque([target])
@@ -121,6 +121,7 @@ def trace(idx, target, source=None, limit=12000, candidates=12, query="", source
             period = period_at(idx, node)
             if (source is None and node != target and numeric(value) and value != 0 and not header
                     and node[0] not in idx.inactive and (not label_match or label_match.search(row.label))
+                    and (source_row is None or node[:2] == source_row)
                     and (source_period is None or period == source_period)):
                 inputs.append({"ref": ref_for(node), "label": row.label, "path": path(node),
                                "period": str(period) if period is not None else None})
