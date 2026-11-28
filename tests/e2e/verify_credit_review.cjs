@@ -32,7 +32,20 @@ async function main() {
     assert.ok(model.checks.length);
     assert.equal(model.confirmed_covenant, null);
     const workbench = page.locator('.credit-workbench');
-    await workbench.getByRole('button', {name: 'Перейти к проверке'}).click();
+    const overview = page.locator('#workbench [data-stage=overview]');
+    await overview.locator('[data-go-review]').waitFor();
+    assert.equal(await page.locator('#chat .credit-workbench, .chips').count(), 0);
+    assert.ok(await page.locator('#q').isVisible());
+    assert.equal(await page.locator('#workspace').evaluate(node => node.scrollWidth > node.clientWidth), false);
+    const metric = model.covenants.find(item => item.id === 'dscr');
+    if (metric.difference) {
+      const finding = overview.locator('[data-difference]');
+      assert.match(await finding.innerText(), /DSCR/);
+      for (const row of metric.difference.rows) assert.ok(await finding.getByText(row.ref, {exact: true}).isVisible());
+    }
+    if (process.env.CF_UI_OVERVIEW) await page.screenshot({path: process.env.CF_UI_OVERVIEW});
+    await overview.locator('[data-go-review]').click();
+    await workbench.getByText('Отраслевые и модельные проверки', {exact: true}).click();
     await workbench.getByText('Тип модели и отрасль', {exact: true}).click();
     const profilesSaved = page.waitForResponse(r => r.url().endsWith('/profiles'));
     await workbench.getByRole('button', {name: 'Подтвердить профили'}).click();
@@ -63,7 +76,6 @@ async function main() {
     const covenant = workbench.locator('[data-covenant]');
     assert.equal(await covenant.getByRole('button', {name: 'Проверить базу Excel'}).isVisible(), false);
     await covenant.locator('[name=metric]').selectOption('dscr');
-    const metric = model.covenants.find(item => item.id === 'dscr');
     const binding = metric.bindings.findIndex(row => row.periods.includes(firstPeriod) && row.periods.includes(secondPeriod));
     assert.ok(binding >= 0);
     await covenant.locator('[name=binding]').selectOption(String(binding));

@@ -211,8 +211,28 @@ def _baseline(s, metrics):
         period = (max if key == "net_debt_ebitda" else min)(values, key=lambda item: item["value"], default=None)
         if period:
             out.append({"id": metric["id"], "name": metric["name"], "unit": metric["location"]["unit"],
-                        "binding_confirmed": metric["binding_confirmed"], **period})
+                        "binding_confirmed": metric["binding_confirmed"],
+                        "basis": "maximum" if key == "net_debt_ebitda" else "minimum", **period})
     return out
+
+
+def _different_values(bindings):
+    """Показывает расхождение только в сопоставимых периодах и единицах."""
+    for i, left in enumerate(bindings):
+        for right in bindings[i + 1:]:
+            if left["unit"] != right["unit"]:
+                continue
+            other = {item["period"]: item for item in right["preview"]}
+            for item in left["preview"]:
+                match = other.get(item["period"])
+                if match is None:
+                    continue
+                a, b = item["value"], match["value"]
+                if abs(a - b) >= max(0.01, 0.01 * max(abs(a), abs(b))):
+                    return {"period": item["period"], "rows": [
+                        {"label": left["label"], **item}, {"label": right["label"], **match},
+                    ], "unit": left["unit"]}
+    return None
 
 
 def _reconciliation_templates(s, metrics):
@@ -242,10 +262,14 @@ def inspect(s):
         for row in metric["bindings"]:
             periods = list(_period_cells(s, row["sheet"], row["row"], forecast=False))
             if periods:
+                preview = [item for item in _period_cells(s, row["sheet"], row["row"]).values()
+                           if item["value"] is not None]
                 bindings.append({"sheet": row["sheet"], "row": row["row"], "label": row["label"],
-                                 "unit": row["unit"], "periods": periods, "ref": f"{row['sheet']}!{row['row']}"})
+                                 "unit": row["unit"], "periods": periods, "preview": preview,
+                                 "ref": f"{row['sheet']}!{row['row']}"})
         if bindings:
-            covenants.append({"id": metric["catalog_id"], "name": metric["name"], "bindings": bindings})
+            covenants.append({"id": metric["catalog_id"], "name": metric["name"], "bindings": bindings,
+                              "difference": _different_values(bindings)})
     return {"version": catalog.VERSION, "model": manifest["model"], "readiness": manifest["readiness"],
             "scenario_sets": manifest["scenario_sets"], "profiles": profiles, "checks": checks,
             "summary": dict(Counter(check["status"] for check in checks)),
