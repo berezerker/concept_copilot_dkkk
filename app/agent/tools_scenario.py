@@ -4,10 +4,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from ..workbook import cell_trace as cells
-from ..workbook import manifest
-from ..workbook.periods import norm_period
 from ..workbook.transaction import same_values, validate_overrides
-from .tools_probe import _target, describe_target, proposed_value, require_excel, resolve_input
+from .tools_probe import _target, describe_target, proposed_value, require_excel, resolve_input_selector
 
 
 LIMIT = 8
@@ -19,35 +17,6 @@ def _baseline(s, refs):
                                        not cells.numeric(b[0][0]) for b in values):
         raise ValueError("Для всех входов и результатов нужны конечные числовые значения Excel")
     return dict(zip(refs, values))
-
-
-def _scenario_input(s, args):
-    source, parameter = args.get("source"), args.get("parameter")
-    if bool(source) == bool(parameter):
-        raise ValueError("Укажите точный адрес входа или параметр паспорта и период входа")
-    location = cells.row_reference(s.idx, source) if source else None
-    if source and not location:
-        return resolve_input(s, args)
-    if not args.get("source_period"):
-        raise ValueError("Для строки паспорта укажите точный период входа или выберите ячейку по адресу A1")
-    period = norm_period(args["source_period"])
-    parameter_id = None
-    if parameter:
-        resolved = manifest.resolve(s, parameter, kind="parameter", intent="shock", limit=4)
-        if resolved["status"] != "resolved":
-            candidates = ", ".join(f"{item['location']['ref']} — {item['location']['label']}"
-                                   for item in resolved["candidates"])
-            detail = f" Возможные строки: {candidates}." if candidates else ""
-            raise ValueError(f"Уточните параметр «{parameter}» из паспорта или укажите адрес ячейки.{detail}")
-        selected = resolved["selected"]
-        loc = selected["location"]
-        location = (loc["sheet"], loc["row"])
-        parameter_id = selected["id"]
-    node = cells.cell_for_period(s.idx, location, period, input_only=True)
-    node, detail = resolve_input(s, {**args, "source": cells.ref_for(node)})
-    if parameter_id:
-        detail["parameter_id"] = parameter_id
-    return node, detail
 
 
 def prepare_excel_scenario(s, args, emit):
@@ -63,7 +32,7 @@ def prepare_excel_scenario(s, args, emit):
             resolved.append(_target(s, item))
         except (KeyError, ValueError) as e:
             raise ValueError(f"Результат {i} (metrics) — {e}") from e
-    inputs = [_scenario_input(s, shock) for shock in shocks]
+    inputs = [resolve_input_selector(s, shock) for shock in shocks]
     outputs = [describe_target(s, *item) for item in resolved]
     source_refs = [detail["source"] for _, detail in inputs]
     target_refs = [detail["target"] for detail in outputs]
@@ -105,7 +74,7 @@ def execute_excel_scenario(s, args, emit):
     if plan["file_hash"] != s.idx.file_hash:
         raise ValueError("Книга изменилась. Подготовьте сценарий заново.")
     current_targets = [cells.ref_for(_target(s, item)[0]) for item in metric_selectors]
-    current_sources = [_scenario_input(s, item)[1]["source"] for item in input_selectors]
+    current_sources = [resolve_input_selector(s, item)[1]["source"] for item in input_selectors]
     if (current_targets != [m["target"] for m in plan["metrics"]]
             or current_sources != [item["source"] for item in plan["inputs"]]):
         raise ValueError("Книга или привязка изменились. Подготовьте сценарий заново.")
@@ -179,6 +148,51 @@ def get_verified_excel_scenario(s, args, emit):
          "metrics": [v["target"] for v in item["metrics"]]}
         for key, item in reversed(history.items())
     ]}
+
+
+def format_verified_excel_scenario(result):
+    """Отчёт для пользователя из измеренных значений и подтверждённого отката."""
+    def label(text, fallback):
+        return " ".join(str(text or fallback).split()).replace("|", "¦")
+
+    inputs = {item["source"]: item for item in result["inputs"]}
+    metrics = {item["target"]: item for item in result["metrics"]}
+    lines = [
+        "### Результаты Excel",
+        "",
+        "| Показатель | Период | База | После совместного шока | Изменение |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ]
+    for observed in result["combined"]["metrics"]:
+        metric = metrics[observed["ref"]]
+        name = label(metric["target_label"], observed["ref"])
+        period = metric["period"] or "—"
+        unit = label(metric["target_unit"], "")
+        if unit:
+            name = f"{name} ({unit})"
+        lines.append(f"| {name} | {period} | {metric['before']:.10g} | "
+                     f"{observed['after']:.10g} | {observed['delta']:+.10g} |")
+
+    lines += ["", "| Допущение | Период | База | После шока | Фактический шок |", "| --- | --- | ---: | ---: | ---: |"]
+    for observed in result["combined"]["inputs"]:
+        item = inputs[observed["ref"]]
+        name = label(item["source_label"], observed["ref"])
+        lines.append(f"| {name} | {item['source_period'] or '—'} | {item['before']:.10g} | "
+                     f"{observed['after']:.10g} | {observed['achieved_pct']:+.10g}% |")
+    if result["individual"]:
+        lines += ["", "| Допущение | Период входа | Показатель | Период результата | Изменение от отдельного шока |",
+                  "| --- | --- | --- | --- | ---: |"]
+        for trial in result["individual"]:
+            ref = trial["inputs"][0]["ref"]
+            item = inputs[ref]
+            for observed in trial["metrics"]:
+                metric = metrics[observed["ref"]]
+                lines.append(f"| {label(item['source_label'], ref)} | {item['source_period'] or '—'} | "
+                             f"{label(metric['target_label'], observed['ref'])} | {metric['period'] or '—'} | "
+                             f"{observed['delta']:+.10g} |")
+    refs = ", ".join(f"`{ref}`" if "`" not in ref else ref for ref in [*inputs, *metrics])
+    lines += ["", "Откат Excel подтверждён.", "", f"Где в модели: {refs}."]
+    return "\n".join(lines)
 
 
 TOOLS_SCENARIO = [

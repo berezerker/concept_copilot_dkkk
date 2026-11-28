@@ -99,7 +99,7 @@ def _index(s):
     return idx
 
 
-def search(s, query="", factor=None, sheet=None, limit=25, *, use_bindings=True):
+def search(s, query="", factor=None, sheet=None, limit=25, *, use_bindings=True, include_partial=False):
     """Поиск параметров. Возвращает (найденные записи с баллом, сколько всего подошло).
     Запись подходит, если в ней нашлось не меньше половины слов запроса (точно, по началу слова или по синониму)."""
     binding = user_overrides.parameter_binding(s, query) if use_bindings else None
@@ -150,7 +150,7 @@ def search(s, query="", factor=None, sheet=None, limit=25, *, use_bindings=True)
         if qf and e["factor"] == qf:
             score += 1.2
         hits.append((score, e, full))
-    if q and any(h[2] for h in hits):                      # есть записи со всеми словами запроса — частичные не показываем
+    if q and not include_partial and any(h[2] for h in hits):
         hits = [h for h in hits if h[2]]
     hits.sort(key=lambda x: -x[0])
     return [dict(e, score=round(sc, 2)) for sc, e, _ in hits[:limit]], len(hits)

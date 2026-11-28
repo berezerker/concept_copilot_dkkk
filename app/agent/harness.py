@@ -21,6 +21,7 @@ import traceback
 from ..llm.base import LLMError
 from .prompts import system_prompt
 from .registry import TOOL_MAP, tool_specs
+from .tools_scenario import format_verified_excel_scenario
 
 MAX_STEPS = 32
 
@@ -40,6 +41,7 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
     force_plan = plan_mode
     failures = {}
     observations = {}
+    verified_scenarios = []
     completion_retry = False
     session.evidence = []
     specs = tool_specs()
@@ -84,6 +86,9 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                     f"- {failure['tool']}: {failure['error']}" for failure in failures.values())
             elif not complete:
                 answer = "Задача выполнена частично: завершение всех шагов не подтверждено.\n\n" + answer
+            elif verified_scenarios:
+                answer = "\n\n".join([answer, *(format_verified_excel_scenario(result)
+                                                for result in verified_scenarios)])
             if session.plan:
                 emit("plan", session.plan)
             emit("answer", {"text": answer, "complete": complete, "seconds": round(time.time() - t0, 1)})
@@ -153,6 +158,9 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
             if ok:
                 failures = {fid: f for fid, f in failures.items() if not (
                     f["tool"] == c.name and (f["args"] == key or fid == retry_of))}
+                if (c.name == "execute_excel_scenario" and result.get("phase") == "verified"
+                        and result.get("rollback_verified") is True):
+                    verified_scenarios.append(result)
             else:
                 failures[c.id] = {"tool": c.name, "args": key,
                                   "error": str(result.get("error") or "Инструмент не подтвердил выполнение")}

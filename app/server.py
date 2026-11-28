@@ -607,6 +607,7 @@ class CellStressIn(BaseModel):
     source_period: str | None = None
     query: str | None = None
     source: str | None = None
+    parameter: str | None = None
     pct: float | None = None
     file_hash: str | None = None
     expected_input: float | None = None

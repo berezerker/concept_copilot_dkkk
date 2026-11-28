@@ -16,7 +16,8 @@ import json
 import math
 import re
 
-NUM_RE = re.compile(r"(?<![\w.])[−\-+]?\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?|(?<![\w.])[−\-+]?\d+(?:[.,]\d+)?")
+NUM_RE = re.compile(r"(?<![\w.])[−\-+]?\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?|"
+                    r"(?<![\w.])[−\-+]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?")
 CELL_RE = re.compile(r"[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё .&-]{0,30}![A-Z]{0,3}\d{1,5}\b")
 
 
@@ -97,7 +98,7 @@ def tools_check(called, expect):
     return {"ok": not miss, "missing": miss}
 
 
-def verified_scenario_check(expect, tools):
+def verified_scenario_check(expect, tools, answer=None):
     """Сверка исполнения с планом и фактическими значениями Excel."""
     import math
     prepared = {}
@@ -138,11 +139,23 @@ def verified_scenario_check(expect, tools):
                     single_refs.add(trial["inputs"][0]["ref"])
             if single_refs != {i["source"] for i in inputs}:
                 continue
-        if (len(metrics) == len(periods) and len(refs) == len(periods)
-                and {m["period"] for m in metrics} == set(periods)
-                and all(m["published_binding"] == expect["metric"] for m in metrics)
-                and refs == {m["ref"] for m in result["combined"]["metrics"]}):
-            return True
+        outcomes = result["combined"]["metrics"]
+        if (len(metrics) != len(periods) or len(refs) != len(periods)
+                or {m["period"] for m in metrics} != set(periods)
+                or any(m["published_binding"] != expect["metric"] for m in metrics)
+                or refs != {m["ref"] for m in outcomes}):
+            continue
+        if answer is not None:
+            normalized = answer.replace("'", "").casefold()
+            addresses = refs | {item["source"] for item in inputs}
+            if any(ref.replace("'", "").casefold() not in normalized for ref in addresses):
+                continue
+            numbers = numbers_in_text(answer)
+            expected = [m["before"] for m in metrics] + [m["after"] for m in outcomes]
+            if any(not any(math.isclose(value, number, rel_tol=0.012, abs_tol=5e-7)
+                           for number in numbers) for value in expected):
+                continue
+        return True
     return False
 
 
@@ -153,7 +166,9 @@ def deterministic(case, run):
     if case.get("expect_tools"):
         res["tools"] = tools_check(called, case["expect_tools"])
     if case.get("expect_verified_scenario"):
-        res["verified_scenario"] = verified_scenario_check(case["expect_verified_scenario"], run["tools"])
+        res["verified_scenario"] = verified_scenario_check(
+            case["expect_verified_scenario"], run["tools"], answer=run.get("answer") or "",
+        )
     if run.get("answer"):
         res["grounding"] = grounding(run["answer"], [t["result"] for t in run["tools"]], case.get("query", ""))
         res["cell_refs"] = cell_refs(run["answer"])
@@ -222,7 +237,7 @@ def verdict(det, jd):
     if det.get("tools") and not det["tools"]["ok"]:
         reasons.append(("FAIL", f"не вызваны инструменты: {det['tools']['missing']}"))
     if det.get("verified_scenario") is False:
-        reasons.append(("FAIL", "нет подтверждённого исполнения требуемого плана Excel"))
+        reasons.append(("FAIL", "нет подтверждённого исполнения плана Excel или результатов в ответе"))
     g = (det.get("grounding") or {}).get("score")
     if g is not None and g < 0.7:
         reasons.append(("FAIL", f"обоснованность чисел {g:.0%}"))
