@@ -1,4 +1,5 @@
 """Свободный план и ошибки: harness не завершает шаги за модель."""
+import json
 import os
 import sys
 import threading
@@ -28,6 +29,27 @@ class Script(LLMClient):
 
 
 class Harness(unittest.TestCase):
+    def test_verified_scenario_results_reach_final_answer(self):
+        result = {
+            "phase": "verified", "rollback_verified": True,
+            "inputs": [{"source": "A!B4", "source_label": "Тариф | Поставка", "source_period": "2026", "before": 20}],
+            "metrics": [{"target": "B!C3", "target_label": "Покрытие", "target_unit": "", "period": "2026", "before": 2.68}],
+            "combined": {"inputs": [{"ref": "A!B4", "after": 18, "achieved_pct": -10}],
+                         "metrics": [{"ref": "B!C3", "after": 2.57, "delta": -0.11}]},
+            "individual": [{"inputs": [{"ref": "A!B4"}], "metrics": [{"ref": "B!C3", "delta": -0.11}]}],
+        }
+        state = SimpleNamespace(plan=None, history=[], id="report-test", lock=threading.Lock())
+        tools = {"execute_excel_scenario": {"fn": lambda *_: result}}
+        events = []
+        with patch("app.agent.harness.system_prompt", return_value="test"), patch("app.agent.harness.TOOL_MAP", tools):
+            run_turn(state, Script([call("execute_excel_scenario")]), "Посчитай", lambda k, d: events.append((k, d)),
+                     plan_mode=False)
+        kind, answer = events[-1]
+        self.assertEqual(kind, "answer")
+        self.assertTrue(answer["complete"])
+        for part in ("2.68 | 2.57 | -0.11", "Тариф ¦ Поставка", "-10%", "A!B4", "B!C3", "Откат Excel подтверждён"):
+            self.assertIn(part, answer["text"])
+
     def run_script(self, responses, work=lambda *args: {"ok": True}, max_steps=10):
         s = SimpleNamespace(plan=None, history=[], id="harness-test", lock=threading.Lock())
         events = []
@@ -40,6 +62,39 @@ class Harness(unittest.TestCase):
         s, answer = self.run_script([call("create_plan", steps=["Расчёт"])])
         self.assertEqual(s.plan["steps"][0]["status"], "pending")
         self.assertFalse(answer["complete"])
+
+    def test_plan_needs_successful_work_in_current_plan(self):
+        s, answer = self.run_script([call("create_plan", steps=["Старый расчёт"]), call("work"),
+                                    call("create_plan", steps=["Новый расчёт"]),
+                                    call("update_plan", step=1, status="done")])
+        self.assertEqual(s.plan["steps"][0]["status"], "pending")
+        self.assertFalse(answer["complete"])
+        self.assertIn("успешный результат инструмента", answer["text"])
+
+    def test_skipping_every_step_keeps_turn_incomplete(self):
+        _, answer = self.run_script([call("create_plan", steps=["Расчёт"]),
+                                    call("update_plan", step=1, status="skipped", note="Нет входа")])
+        self.assertFalse(answer["complete"])
+
+    def test_identical_reads_stay_compact_and_changed_read_is_preserved(self):
+        state = SimpleNamespace(plan=None, history=[], id="repeated-reads", lock=threading.Lock())
+        args = {"sheet": "Модель", "rows": [42], "years": ["2026", "2027"]}
+        ids = ["read-one", "repeat-one", "read-changed", "repeat-changed"]
+        client = Script([LLMResponse(tool_calls=[ToolCall(id_, "read_rows", args)]) for id_ in ids])
+        readings = iter([42, 42, 43, 43])
+        tools = {"read_rows": {"fn": lambda *_: {"value": next(readings)}, "compact_repeated_read": True}}
+        visible = []
+        with patch("app.agent.harness.system_prompt", return_value="test"), \
+             patch("app.agent.harness.TOOL_MAP", tools), patch.object(client, "chat", wraps=client.chat) as requests:
+            run_turn(state, client, "Прочитай строку", lambda k, d: visible.append((k, d)), plan_mode=False)
+        transcript = requests.call_args_list[-1].args[0]
+        model_results = [json.loads(m["content"]) for m in transcript if m["role"] == "tool"]
+        self.assertEqual(model_results[0], {"value": 42})
+        self.assertEqual(model_results[1]["same_as_call"], ids[0])
+        self.assertEqual(model_results[2], {"value": 43})
+        self.assertEqual(model_results[3]["same_as_call"], ids[2])
+        self.assertEqual([d["result"]["value"] for kind, d in visible if kind == "tool_end"], [42, 42, 43, 43])
+        self.assertEqual([e.get("same_as_call") for e in state.evidence], [None, ids[0], None, ids[2]])
 
     def test_failed_tool_cannot_be_hidden_by_final_or_plan(self):
         _, answer = self.run_script([call("create_plan", steps=["Расчёт"]), call("work"),
@@ -62,6 +117,7 @@ class Harness(unittest.TestCase):
                                     call("update_plan", step=1, status="done", note="42")], work)
         self.assertTrue(answer["complete"])
         self.assertEqual([e["ok"] for e in s.evidence if e["tool"] == "work"], [False, True])
+        self.assertEqual(s.plan["steps"][0]["evidence"], {"id": "work", "tool": "work"})
 
     def test_limit_keeps_steps_unfinished(self):
         s, answer = self.run_script([call("create_plan", steps=["Расчёт"])], max_steps=1)
@@ -91,6 +147,21 @@ class Harness(unittest.TestCase):
         self.assertFalse(answer["complete"])
         self.assertIn("JSON-объектом", answer["text"])
 
+    def test_validation_failure_asks_for_corrected_arguments(self):
+        s = SimpleNamespace(plan=None, history=[], id="recovery-test", lock=threading.Lock())
+        events = []
+
+        def work(*_):
+            raise ValueError("Укажите период")
+
+        with patch("app.agent.harness.system_prompt", return_value="test"), \
+             patch("app.agent.harness.TOOL_MAP", {"work": {"fn": work}}):
+            run_turn(s, Script([call("work")]), "Подготовь расчёт", lambda k, d: events.append((k, d)), plan_mode=False)
+        failure = next(d["result"] for k, d in events if k == "tool_end")
+        self.assertIn("Исправь аргументы", failure["recovery"])
+        self.assertEqual(failure["failed_call_id"], "work")
+        self.assertFalse(events[-1][1]["complete"])
+
     def test_tainted_engine_still_allows_plan_to_record_failure(self):
         engine = SimpleNamespace(_tainted=False, n_scen=0, transactions=[])
         def work(s, args, emit):
@@ -111,6 +182,8 @@ class Harness(unittest.TestCase):
         self.assertFalse(answer["complete"])
         self.assertIn("Excel не восстановлен", answer["text"])
         self.assertNotIn("update_plan", answer["text"])
+        failed = next(row for row in s.evidence if not row["ok"])
+        self.assertEqual(failed["execution"]["recent_transactions"][0]["status"], "restore_failed")
 
     def test_kpki_stops_at_original_restore_error(self):
         error = RestorationError("Inputs!C3: восстановление не подтверждено")

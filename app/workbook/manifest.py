@@ -91,14 +91,16 @@ def _metric_record(s, cid: str, entry: dict, param_entries: list[dict]) -> dict:
 
 def _parameter_record(s, entry: dict) -> dict:
     sheet, row = entry["sheet"], int(entry["row"])
-    dynamic = bool(s.idx.sheets.get(sheet) and s.idx.sheets[sheet].dynamic)
+    sheet_info = s.idx.sheets.get(sheet)
+    dynamic = bool(sheet_info and sheet_info.dynamic)
     identity = 0.85 if (s.sem or {}).get("llm") else 0.68
     dependency = 0.65 if dynamic else (0.9 if entry.get("influences") else 0.55)
     shock = 0.72 if entry.get("mixed") else 0.95
     return {
         "id": parameter_id(sheet, row), "kind": "parameter", "name": entry["name"],
         "location": {"ref": entry["ref"], "sheet": sheet, "row": row, "label": entry["label"],
-                     "block": entry.get("block") or "", "unit": entry.get("unit") or ""},
+                     "block": entry.get("block") or "", "unit": entry.get("unit") or "",
+                     "sheet_role": sheet_info.role if sheet_info else None},
         "factor": {"id": entry["factor"], "name": entry["factor_name"], "sub": entry.get("sub")},
         "values": entry.get("values") or {}, "scalar": bool(entry.get("scalar")),
         "mixed": bool(entry.get("mixed")), "active": sheet not in s.idx.inactive,
@@ -259,7 +261,7 @@ def resolve(s, query: str, kind: str = "auto", intent: str = "read", limit: int 
         for score, m in _metric_candidates(manifest, query):
             candidates.append({"score": round(score, 2), **m})
     if kind in ("auto", "parameter"):
-        hits, _ = pr.search(s, query, limit=max(2, len(manifest["parameters"])))
+        hits, _ = pr.search(s, query, limit=max(2, len(manifest["parameters"])), include_partial=True)
         by_ref = {p["location"]["ref"]: p for p in manifest["parameters"]}
         for hit in hits:
             p = by_ref.get(hit["ref"])

@@ -16,7 +16,8 @@ import json
 import math
 import re
 
-NUM_RE = re.compile(r"(?<![\w.])[−\-+]?\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?|(?<![\w.])[−\-+]?\d+(?:[.,]\d+)?")
+NUM_RE = re.compile(r"(?<![\w.])[−\-+]?\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?|"
+                    r"(?<![\w.])[−\-+]?\d+(?:[.,]\d+)?(?:[eE][-+]?\d+)?")
 CELL_RE = re.compile(r"[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё .&-]{0,30}![A-Z]{0,3}\d{1,5}\b")
 
 
@@ -97,12 +98,77 @@ def tools_check(called, expect):
     return {"ok": not miss, "missing": miss}
 
 
+def verified_scenario_check(expect, tools, answer=None):
+    """Сверка исполнения с планом и фактическими значениями Excel."""
+    import math
+    prepared = {}
+    for tool in tools:
+        result = tool.get("result")
+        if not tool.get("ok") or not isinstance(result, dict):
+            continue
+        plan_id = result.get("plan_id")
+        if tool["name"] == "prepare_excel_scenario" and plan_id and result.get("phase") == "preflight":
+            prepared[plan_id] = result
+        if tool["name"] != "execute_excel_scenario" or plan_id not in prepared or result.get("phase") != "verified":
+            continue
+        plan = prepared[plan_id]
+        receipt = result.get("combined", {}).get("transaction", {})
+        if not result.get("rollback_verified") or receipt.get("status") != "verified" or receipt.get("restored") is not True:
+            continue
+        periods, shocks = expect["periods"], expect["shocks_per_period"]
+        inputs = plan["inputs"]
+        if len(inputs) != len(periods) * len(shocks) or len({i["source"] for i in inputs}) != len(inputs):
+            continue
+        if any(sorted(i["requested_pct"] for i in inputs if i["source_period"] == p) != sorted(shocks) for p in periods):
+            continue
+        labels = expect.get("driver_labels", {})
+        if any(labels.get(f"{i['requested_pct']:g}", "").casefold() not in i.get("source_label", "").casefold()
+               for i in inputs):
+            continue
+        actual = {i["ref"]: i["achieved_pct"] for i in result["combined"]["inputs"]}
+        if not all(i["source"] in actual and math.isclose(actual[i["source"]], i["requested_pct"], abs_tol=1e-8) for i in inputs):
+            continue
+        metrics = plan["metrics"]
+        refs = {m["target"] for m in metrics}
+        if expect.get("individual"):
+            single_refs = set()
+            for trial in result.get("individual", []):
+                if (len(trial["inputs"]) == 1 and trial["transaction"].get("status") == "verified"
+                        and trial["transaction"].get("restored") is True
+                        and refs == {m["ref"] for m in trial["metrics"]}):
+                    single_refs.add(trial["inputs"][0]["ref"])
+            if single_refs != {i["source"] for i in inputs}:
+                continue
+        outcomes = result["combined"]["metrics"]
+        if (len(metrics) != len(periods) or len(refs) != len(periods)
+                or {m["period"] for m in metrics} != set(periods)
+                or any(m["published_binding"] != expect["metric"] for m in metrics)
+                or refs != {m["ref"] for m in outcomes}):
+            continue
+        if answer is not None:
+            normalized = answer.replace("'", "").casefold()
+            addresses = refs | {item["source"] for item in inputs}
+            if any(ref.replace("'", "").casefold() not in normalized for ref in addresses):
+                continue
+            numbers = numbers_in_text(answer)
+            expected = [m["before"] for m in metrics] + [m["after"] for m in outcomes]
+            if any(not any(math.isclose(value, number, rel_tol=0.012, abs_tol=5e-7)
+                           for number in numbers) for value in expected):
+                continue
+        return True
+    return False
+
+
 def deterministic(case, run):
     called = [t["name"] for t in run["tools"]]
     res = {"seconds": run["seconds"], "steps": len(called), "tool_errors": sum(1 for t in run["tools"] if not t["ok"]),
            "error": run.get("error")}
     if case.get("expect_tools"):
         res["tools"] = tools_check(called, case["expect_tools"])
+    if case.get("expect_verified_scenario"):
+        res["verified_scenario"] = verified_scenario_check(
+            case["expect_verified_scenario"], run["tools"], answer=run.get("answer") or "",
+        )
     if run.get("answer"):
         res["grounding"] = grounding(run["answer"], [t["result"] for t in run["tools"]], case.get("query", ""))
         res["cell_refs"] = cell_refs(run["answer"])
@@ -170,6 +236,8 @@ def verdict(det, jd):
         reasons.append(("FAIL", f"ошибка: {det['error'][:120]}"))
     if det.get("tools") and not det["tools"]["ok"]:
         reasons.append(("FAIL", f"не вызваны инструменты: {det['tools']['missing']}"))
+    if det.get("verified_scenario") is False:
+        reasons.append(("FAIL", "нет подтверждённого исполнения плана Excel или результатов в ответе"))
     g = (det.get("grounding") or {}).get("score")
     if g is not None and g < 0.7:
         reasons.append(("FAIL", f"обоснованность чисел {g:.0%}"))

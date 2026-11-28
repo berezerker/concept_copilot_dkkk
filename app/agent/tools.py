@@ -105,9 +105,11 @@ def t_create_plan(s, a, emit):
     steps = [str(x) for x in (a.get("steps") or [])][:10]
     if not steps:
         raise ValueError("Нужен непустой список шагов")
+    s._plan_evidence_start = len(getattr(s, "evidence", []))
     s.plan = {"goal": a.get("goal", ""), "steps": [{"title": t, "status": "pending", "note": ""} for t in steps]}
     emit("plan", s.plan)
-    return {"ok": True, "steps": len(steps), "hint": "Выполняй шаги по порядку и отмечай их через update_plan."}
+    return {"ok": True, "steps": len(steps),
+            "hint": "Сначала выполни работу инструментом модели, затем отметь результат через update_plan."}
 
 
 def t_update_plan(s, a, emit):
@@ -122,6 +124,14 @@ def t_update_plan(s, a, emit):
         raise ValueError("status: in_progress, done или skipped")
     if status == "skipped" and not a.get("note"):
         raise ValueError("Для пропущенного шага нужна причина в note")
+    if status == "done":
+        evidence = getattr(s, "evidence", [])[getattr(s, "_plan_evidence_start", 0):]
+        work = next((e for e in reversed(evidence) if e["ok"] and e["tool"] not in ("create_plan", "update_plan")), None)
+        if work is None:
+            raise ValueError("Для завершения шага сначала получи успешный результат инструмента модели в текущем плане")
+        st["evidence"] = {"id": work["id"], "tool": work["tool"]}
+    else:
+        st.pop("evidence", None)
     st["status"] = status
     st["note"] = a.get("note", "")[:300]
     if a.get("new_steps"):
@@ -449,6 +459,7 @@ def _verify_direct(s, e, notes):
     Один раз на показатель проверяем пересчётом: подменяем показатель на −10 % и смотрим, сдвинулись ли итоги,
     до которых он должен дойти. Не сдвинулись — строка справочная, шокируем через допущения. Итог запоминается."""
     from ..workbook import catalog as cg
+    from ..workbook.transaction import RestorationError
     if e.get("direct_verified") is not None or not s.engine_open:
         return "direct" if e.get("direct_verified", True) else "drivers"
     targets = [r for r in (e.get("reaches") or []) + ["ebitda", "net_income"] if r in s.catalog["concepts"] and r != e["id"]]
@@ -463,6 +474,8 @@ def _verify_direct(s, e, notes):
         got = _read_metrics(s.engine.scenario(ov, reads, reads)[0], mref)
         moved = [t_ for t_, b, g in zip(targets, base, got)
                  if any(b.get(y) is not None and g.get(y) is not None and abs(g[y] - b[y]) > 1e-6 * max(abs(b[y]), 1e-9) for y in b)]
+    except RestorationError:
+        raise
     except Exception:
         return "direct"                       # проверить не удалось — остаёмся при выводе по графу
     e["direct_verified"] = bool(moved)
@@ -1023,16 +1036,16 @@ def t_find_parameters(s, a, emit):
     """Реестр параметров модели: найти введённые числа (цены, курсы, коэффициенты, ставки…) по смыслу запроса."""
     from ..workbook import params as pr
     limit = int(a.get("limit", 20) or 20)
-    hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit)
+    hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit, include_partial=True)
     out = [{"ref": h["ref"], "sheet": h["sheet"], "row": h["row"], "name": h["name"], "label": h["label"][:90], "block": h["block"][:90] or None,
             "unit": h["unit"] or None, "factor": h["factor"], "sub": h["sub"], "scalar": h["scalar"] or None, "values": h["values"],
             "influences": h["influences"] or None, "fanout": h["fanout"], "meaning": h["desc"] or None} for h in hits]
     payload = {"query": a.get("query") or "", "found": total, "parameters": out, "overview": pr.overview(s)}
     emit("params", payload)
     res = {"found": total, "parameters": out,
-           "note": "Шок параметра: {sheet, row, op, value} в run_stress (scalar — параметр одной ячейкой, шок меняет её). "
-                   "influences — на какие ключевые показатели параметр влияет по формулам (пусто — до них не доходит). "
-                   "Несколько похожих строк (по сегментам, продуктам) — уточни у пользователя или шокируй все и скажи об этом."}
+           "note": "Это список кандидатов. Для точного Excel-стресса передай ref строки и source_period. "
+                   "influences описывает связи по статической карте. При похожих строках сравни кандидатов "
+                   "отдельно или уточни нужную привязку. Для стресса всей выбранной строки доступен run_stress."}
     if not out:
         res["overview"] = pr.overview(s)
         res["note"] = ("По запросу ничего не найдено. Попробуй другие слова (в том числе по-английски, как в подписях модели), "
@@ -1077,7 +1090,7 @@ TOOLS = [
          "steps": {"type": "array", "items": {"type": "string"}, "description": "Шаги плана"}},
          "required": ["goal", "steps"]}},
     {"name": "update_plan", "fn": t_update_plan,
-     "description": "Отметить статус шага плана (номер с 1). Можно добавить новые шаги, если план пришлось расширить.",
+     "description": "Отметить статус шага (номер с 1). Статус done требует успешного результата инструмента модели.",
      "parameters": {"type": "object", "properties": {
          "step": {"type": "integer"}, "status": {"type": "string", "enum": ["in_progress", "done", "skipped"]},
          "note": {"type": "string", "description": "Короткий итог шага"},
@@ -1111,7 +1124,7 @@ TOOLS = [
      "description": "Реестр параметров ЭТОЙ модели: все введённые числа, от которых что-то зависит (цены, курсы, коэффициенты, "
                     "ставки, нормативы — на любом листе, рядом по годам или одной ячейкой). Ищет по смыслу запроса в названии, "
                     "подписи, блоке, листе и факторе («цена бензина», «коэффициент загрузки», «ставка по кредиту»). "
-                    "ВСЕГДА вызывай перед шоком, если пользователь называет параметр словами. Без query — обзор реестра.",
+                    "Дополняет resolve_target, когда нужно посмотреть другие строки или их значения. Без query — обзор реестра.",
      "parameters": {"type": "object", "properties": {
          "query": {"type": "string", "description": "Что ищем, словами пользователя"},
          "factor": {"type": "string", "description": "Ограничить фактором или подфактором"},
@@ -1134,7 +1147,7 @@ TOOLS = [
          "query": {"type": "string"}, "sheet": {"type": "string", "description": "Искать только на этом листе"},
          "only_inputs": {"type": "boolean", "description": "Только строки с числовыми допущениями"},
          "limit": {"type": "integer"}}, "required": ["query"]}},
-    {"name": "read_rows", "fn": t_read_rows,
+    {"name": "read_rows", "fn": t_read_rows, "compact_repeated_read": True,
      "description": "Прочитать строки листа: подпись, единицы, значения по годам, пример формулы прогноза.",
      "parameters": {"type": "object", "properties": {
          "sheet": {"type": "string"}, "rows": {"type": "array", "items": {"type": "integer"}},

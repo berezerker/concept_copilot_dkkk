@@ -11,7 +11,7 @@ import time
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import config
 from .agent.harness import run_turn
@@ -536,6 +536,7 @@ class CellStressIn(BaseModel):
     source_period: str | None = None
     query: str | None = None
     source: str | None = None
+    parameter: str | None = None
     pct: float | None = None
     file_hash: str | None = None
     expected_input: float | None = None
@@ -558,6 +559,66 @@ def cell_stress(session_id: str, req: CellStressIn):
             raise HTTPException(409, str(exc)) from exc
         except (ValueError, KeyError, RuntimeError) as exc:
             raise HTTPException(400, str(exc)) from exc
+
+
+class ScenarioShockIn(BaseModel):
+    source: str | None = None
+    parameter: str | None = None
+    source_period: str | None = None
+    pct: float
+
+
+class ScenarioMetricIn(BaseModel):
+    target: str | None = None
+    metric: str | None = None
+    concept: str | None = None
+    period: str | None = None
+
+
+class ScenarioPrepareIn(BaseModel):
+    shocks: list[ScenarioShockIn] = Field(min_length=1, max_length=8)
+    metrics: list[ScenarioMetricIn] = Field(min_length=1, max_length=8)
+    experiment_reason: str | None = None
+
+
+class ScenarioExecuteIn(BaseModel):
+    plan_id: str
+    compare_individual: bool = False
+
+
+def _excel_scenario_call(session_id, fn, args):
+    from .logbus import Cancelled
+    from .workbook.transaction import RestorationError
+
+    s = _session(session_id)
+    with s.lock:
+        try:
+            return fn(s, args, lambda *_: None)
+        except Cancelled as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RestorationError as exc:
+            s.refresh_manifest()
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, KeyError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/excel-scenarios/{session_id}/prepare")
+def prepare_scenario(session_id: str, req: ScenarioPrepareIn):
+    from .agent.tools_scenario import prepare_excel_scenario
+    return _excel_scenario_call(session_id, prepare_excel_scenario, req.model_dump())
+
+
+@app.post("/api/excel-scenarios/{session_id}/execute")
+def execute_scenario(session_id: str, req: ScenarioExecuteIn):
+    from .agent.tools_scenario import execute_excel_scenario
+    return _excel_scenario_call(session_id, execute_excel_scenario, req.model_dump())
+
+
+@app.get("/api/excel-scenarios/{session_id}")
+def verified_scenarios(session_id: str, plan_id: str | None = None):
+    from .agent.tools_scenario import get_verified_excel_scenario
+    return _excel_scenario_call(session_id, get_verified_excel_scenario, {"plan_id": plan_id})
 
 
 @app.get("/api/audit/{session_id}")

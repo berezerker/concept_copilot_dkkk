@@ -61,6 +61,15 @@ class Transactions(unittest.TestCase):
         self.assertEqual(CALLS["writes"], before)
         self.assert_base()
 
+    def test_changed_control_baseline_is_rejected_before_write(self):
+        before = CALLS["writes"]
+        expected = {self.watch[0]: [[1.] * 5]}
+        with self.assertRaisesRegex(ValueError, "база изменилась"):
+            self.e._scenario(self.ov, self.watch, self.watch, expected)
+        self.assertEqual(CALLS["writes"], before)
+        self.assertEqual(self.e.last_transaction["status"], "preflight")
+        self.assert_base()
+
     def test_partial_batch_write_rolls_back(self):
         def batch(name, ops):
             sh, addr, kind, values = ops[0]

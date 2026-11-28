@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import traceback
@@ -20,6 +21,7 @@ import traceback
 from ..llm.base import LLMError
 from .prompts import system_prompt
 from .registry import TOOL_MAP, tool_specs
+from .tools_scenario import format_verified_excel_scenario
 
 MAX_STEPS = 32
 
@@ -38,6 +40,8 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
     system = {"role": "system", "content": system_prompt(session)}
     force_plan = plan_mode
     failures = {}
+    observations = {}
+    verified_scenarios = []
     completion_retry = False
     session.evidence = []
     specs = tool_specs()
@@ -63,23 +67,28 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
 
         if not resp.tool_calls:
             answer = resp.content.strip() or "Модель вернула пустой ответ."
-            pending = [i + 1 for i, st in enumerate((session.plan or {}).get("steps", []))
-                       if st["status"] not in ("done", "skipped")]
-            if (pending or failures or (plan_mode and not session.plan)) and not completion_retry:
+            steps = (session.plan or {}).get("steps", [])
+            pending = [i + 1 for i, st in enumerate(steps) if st["status"] not in ("done", "skipped")]
+            needs_evidence = plan_mode and not any(st["status"] == "done" and st.get("evidence") for st in steps)
+            if (pending or failures or needs_evidence) and not completion_retry:
                 completion_retry = True
                 turn.append({"role": "assistant", "content": answer})
                 turn.append({"role": "user", "content":
                     "Проверка выполнения: незавершённые шаги " + str(pending) +
                     "; ошибки инструментов: " + json.dumps(failures, ensure_ascii=False) +
+                    (". Нет завершённого шага с результатом инструмента" if needs_evidence else "") +
                     ". Исправь ошибки и повтори нужные инструменты. Обнови план только по фактическим результатам; "
                     "невыполнимые шаги пропусти с причиной. Не объявляй расчёт успешным без подтверждения."})
                 continue
-            complete = not failures and not pending and (not plan_mode or bool(session.plan))
+            complete = not failures and not pending and not needs_evidence
             if failures:
                 answer = "Задача не завершена: остались ошибки инструментов.\n\n" + "\n".join(
                     f"- {failure['tool']}: {failure['error']}" for failure in failures.values())
             elif not complete:
                 answer = "Задача выполнена частично: завершение всех шагов не подтверждено.\n\n" + answer
+            elif verified_scenarios:
+                answer = "\n\n".join([answer, *(format_verified_excel_scenario(result)
+                                                for result in verified_scenarios)])
             if session.plan:
                 emit("plan", session.plan)
             emit("answer", {"text": answer, "complete": complete, "seconds": round(time.time() - t0, 1)})
@@ -103,6 +112,8 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
             ok = True
             key = json.dumps(c.arguments, sort_keys=True, ensure_ascii=False)
             retry_of = None
+            execution = None
+            recovery = "Устрани причину ошибки, затем повтори вызов. Если изменишь аргументы, укажи retry_of."
             try:
                 if tool is None:
                     raise ValueError(f"Нет инструмента {c.name}")
@@ -117,14 +128,16 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                 with wait_lock(session.lock, emit, session.id):
                     engine = getattr(session, "engine", None)
                     seq = getattr(engine, "n_scen", 0)
-                    result = tool["fn"](session, args, emit)
+                    try:
+                        result = tool["fn"](session, args, emit)
+                    finally:
+                        receipts = [r for r in getattr(engine, "transactions", []) if r["sequence"] > seq]
+                        if receipts:
+                            execution = {"scenarios": getattr(engine, "n_scen", 0) - seq,
+                                         "recent_transactions": receipts[-5:]}
                     if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
                         ok = False
-                    receipts = [r for r in getattr(engine, "transactions", []) if r["sequence"] > seq]
-                    if receipts and isinstance(result, dict):
-                        result = dict(result, execution={"scenarios": getattr(engine, "n_scen", 0) - seq,
-                                                       "recent_transactions": receipts[-5:]})
-                    if receipts and getattr(engine, "_tainted", False):
+                    if execution and getattr(engine, "_tainted", False):
                         raise RuntimeError("Excel не восстановлен; результат инструмента нельзя использовать")
             except Exception as e:
                 from ..logbus import Cancelled
@@ -132,26 +145,52 @@ def run_turn(session, client, user_text: str, emit, plan_mode: bool = True, max_
                     raise
                 ok = False
                 result = {"error": f"{type(e).__name__}: {e}"}
-                if not isinstance(e, (ValueError, KeyError)):
+                if isinstance(e, (ValueError, KeyError)):
+                    recovery = "Исправь аргументы с учётом ошибки и передай failed_call_id в retry_of. " \
+                               "Если данных не хватает, сначала уточни их."
+                else:
                     result["trace"] = traceback.format_exc(limit=2)[-600:]
                 if getattr(getattr(session, "engine", None), "_tainted", False):
+                    recovery = "Откат не подтверждён. Для расчётов нужно заново загрузить книгу."
                     from ..workbook import manifest as mf
                     session.refresh_manifest()
                     emit("manifest", mf.summary(session.manifest))
             if ok:
                 failures = {fid: f for fid, f in failures.items() if not (
                     f["tool"] == c.name and (f["args"] == key or fid == retry_of))}
+                if (c.name == "execute_excel_scenario" and result.get("phase") == "verified"
+                        and result.get("rollback_verified") is True):
+                    verified_scenarios.append(result)
             else:
                 failures[c.id] = {"tool": c.name, "args": key,
                                   "error": str(result.get("error") or "Инструмент не подтвердил выполнение")}
-                result = dict(result, failed_call_id=c.id,
-                              recovery="Повтори тот же вызов или передай retry_of с этим id при исправлении аргументов")
-            session.evidence.append({"id": c.id, "tool": c.name, "ok": ok})
-            ui_result = result if len(json.dumps(result, ensure_ascii=False, default=str)) <= 20000 else _short(result, 20000)
+                result = dict(result, failed_call_id=c.id, recovery=recovery)
+            evidence = {"id": c.id, "tool": c.name, "ok": ok}
+            if execution:
+                evidence["execution"] = execution
+                if isinstance(result, dict):
+                    result = dict(result, execution=execution)
+            serialized = json.dumps(result, ensure_ascii=False, default=str)
+            model_result = result
+            if ok and not execution and tool.get("compact_repeated_read"):
+                observation = (c.name, key)
+                fingerprint = hashlib.sha256(serialized.encode("utf-8")).digest()
+                previous = observations.get(observation)
+                if previous and previous[0] == fingerprint:
+                    evidence["same_as_call"] = previous[1]
+                    model_result = {
+                        "unchanged": True, "same_as_call": previous[1],
+                        "next_action": "Результат этого чтения уже получен. Перейди к следующему шагу или измени запрос, "
+                                       "если нужны другие данные.",
+                    }
+                else:
+                    observations[observation] = (fingerprint, c.id)
+            session.evidence.append(evidence)
+            ui_result = result if len(serialized) <= 20000 else _short(result, 20000)
             emit("tool_end", {"id": c.id, "name": c.name, "ok": ok, "seconds": round(time.time() - t1, 1),
                               "result": ui_result})
             turn.append({"role": "tool", "tool_call_id": c.id, "name": c.name,
-                         "content": _short(result, client.max_tool_chars)})
+                         "content": _short(model_result, client.max_tool_chars)})
 
     emit("answer", {"text": "Достигнут лимит шагов агента. Задача не завершена; оставшиеся шаги не отмечены выполненными.",
                     "complete": False})
