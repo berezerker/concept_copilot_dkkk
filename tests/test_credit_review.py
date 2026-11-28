@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.workbook import credit_review
 from app.workbook.index import RowInfo, SheetInfo, WorkbookIndex
 from app.workbook.periods import Period
+from app.agent.registry import tool_specs
 
 
 def test_aggregate_is_not_a_missing_driver():
@@ -42,7 +43,15 @@ def test_annual_and_quarterly_targets_stay_distinct():
     assert credit_review.cells.cell_for_period(index, (sheet.name, 4), 2026) == (sheet.name, 4, 2)
 
 
+def test_stress_accepts_optional_operations_without_a_top_level_union():
+    schema = next(tool["parameters"] for tool in tool_specs() if tool["name"] == "run_cell_stress")
+    assert schema["type"] == "object" and "anyOf" not in schema
+    assert schema["properties"]["op"]["enum"] == ["pct", "pp", "set"]
+    assert "pct" not in schema["required"]
+
+
 if __name__ == "__main__":
     test_aggregate_is_not_a_missing_driver()
     test_annual_and_quarterly_targets_stay_distinct()
+    test_stress_accepts_optional_operations_without_a_top_level_union()
     print("credit review evidence and period alignment ok")

@@ -238,6 +238,5 @@ TOOLS_PROBE = [
          **_TARGET, "source": {"type": "string", "description": "Точный адрес A1 входа из плана"},
          "file_hash": {"type": "string"}, "expected_input": {"type": "number"},
      },
-                    "required": ["target", "source", "file_hash", "expected_input"],
-                    "anyOf": [{"required": ["pct"]}, {"required": ["op", "value"]}]}},
+                    "required": ["target", "source", "file_hash", "expected_input"]}},
 ]
