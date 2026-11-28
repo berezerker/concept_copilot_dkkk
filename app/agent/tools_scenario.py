@@ -150,6 +150,51 @@ def get_verified_excel_scenario(s, args, emit):
     ]}
 
 
+def format_verified_excel_scenario(result):
+    """Отчёт для пользователя из измеренных значений и подтверждённого отката."""
+    def label(text, fallback):
+        return " ".join(str(text or fallback).split()).replace("|", "¦")
+
+    inputs = {item["source"]: item for item in result["inputs"]}
+    metrics = {item["target"]: item for item in result["metrics"]}
+    lines = [
+        "### Результаты Excel",
+        "",
+        "| Показатель | Период | База | После совместного шока | Изменение |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ]
+    for observed in result["combined"]["metrics"]:
+        metric = metrics[observed["ref"]]
+        name = label(metric["target_label"], observed["ref"])
+        period = metric["period"] or "—"
+        unit = label(metric["target_unit"], "")
+        if unit:
+            name = f"{name} ({unit})"
+        lines.append(f"| {name} | {period} | {metric['before']:.10g} | "
+                     f"{observed['after']:.10g} | {observed['delta']:+.10g} |")
+
+    lines += ["", "| Допущение | Период | База | После шока | Фактический шок |", "| --- | --- | ---: | ---: | ---: |"]
+    for observed in result["combined"]["inputs"]:
+        item = inputs[observed["ref"]]
+        name = label(item["source_label"], observed["ref"])
+        lines.append(f"| {name} | {item['source_period'] or '—'} | {item['before']:.10g} | "
+                     f"{observed['after']:.10g} | {observed['achieved_pct']:+.10g}% |")
+    if result["individual"]:
+        lines += ["", "| Допущение | Период входа | Показатель | Период результата | Изменение от отдельного шока |",
+                  "| --- | --- | --- | --- | ---: |"]
+        for trial in result["individual"]:
+            ref = trial["inputs"][0]["ref"]
+            item = inputs[ref]
+            for observed in trial["metrics"]:
+                metric = metrics[observed["ref"]]
+                lines.append(f"| {label(item['source_label'], ref)} | {item['source_period'] or '—'} | "
+                             f"{label(metric['target_label'], observed['ref'])} | {metric['period'] or '—'} | "
+                             f"{observed['delta']:+.10g} |")
+    refs = ", ".join(f"`{ref}`" if "`" not in ref else ref for ref in [*inputs, *metrics])
+    lines += ["", "Откат Excel подтверждён.", "", f"Где в модели: {refs}."]
+    return "\n".join(lines)
+
+
 TOOLS_SCENARIO = [
     {"name": "prepare_excel_scenario", "fn": prepare_excel_scenario,
      "description": "Подготовить совместный шок до 8 входов. Принимает ячейки либо параметры из паспорта с периодами. "

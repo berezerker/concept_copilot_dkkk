@@ -29,6 +29,27 @@ class Script(LLMClient):
 
 
 class Harness(unittest.TestCase):
+    def test_verified_scenario_results_reach_final_answer(self):
+        result = {
+            "phase": "verified", "rollback_verified": True,
+            "inputs": [{"source": "A!B4", "source_label": "Тариф | Поставка", "source_period": "2026", "before": 20}],
+            "metrics": [{"target": "B!C3", "target_label": "Покрытие", "target_unit": "", "period": "2026", "before": 2.68}],
+            "combined": {"inputs": [{"ref": "A!B4", "after": 18, "achieved_pct": -10}],
+                         "metrics": [{"ref": "B!C3", "after": 2.57, "delta": -0.11}]},
+            "individual": [{"inputs": [{"ref": "A!B4"}], "metrics": [{"ref": "B!C3", "delta": -0.11}]}],
+        }
+        state = SimpleNamespace(plan=None, history=[], id="report-test", lock=threading.Lock())
+        tools = {"execute_excel_scenario": {"fn": lambda *_: result}}
+        events = []
+        with patch("app.agent.harness.system_prompt", return_value="test"), patch("app.agent.harness.TOOL_MAP", tools):
+            run_turn(state, Script([call("execute_excel_scenario")]), "Посчитай", lambda k, d: events.append((k, d)),
+                     plan_mode=False)
+        kind, answer = events[-1]
+        self.assertEqual(kind, "answer")
+        self.assertTrue(answer["complete"])
+        for part in ("2.68 | 2.57 | -0.11", "Тариф ¦ Поставка", "-10%", "A!B4", "B!C3", "Откат Excel подтверждён"):
+            self.assertIn(part, answer["text"])
+
     def run_script(self, responses, work=lambda *args: {"ok": True}, max_steps=10):
         s = SimpleNamespace(plan=None, history=[], id="harness-test", lock=threading.Lock())
         events = []

@@ -28,7 +28,7 @@ def test_verified_scenario_requires_matching_plan_and_actual_shocks():
     plan = {"plan_id": "p", "phase": "preflight",
             "inputs": [{"source": "X!A1", "source_period": "2026", "requested_pct": -10},
                        {"source": "X!B1", "source_period": "2026", "requested_pct": 10}],
-            "metrics": [{"target": "Y!A1", "period": "2026", "published_binding": "dscr"}]}
+            "metrics": [{"target": "Y!A1", "period": "2026", "published_binding": "dscr", "before": 1.5}]}
     result = {"plan_id": "p", "phase": "verified", "rollback_verified": True,
               "combined": {"transaction": {"status": "verified", "restored": True},
                            "inputs": [{"ref": "X!A1", "achieved_pct": -10},
@@ -37,6 +37,8 @@ def test_verified_scenario_requires_matching_plan_and_actual_shocks():
     tools = [{"name": "prepare_excel_scenario", "ok": True, "result": plan},
              {"name": "execute_excel_scenario", "ok": True, "result": result}]
     assert g.verified_scenario_check(expect, tools)
+    assert not g.verified_scenario_check(expect, tools, answer="План выполнен")
+    assert g.verified_scenario_check(expect, tools, answer="DSCR с 1,5 до 2. Ячейки X!A1, X!B1, Y!A1")
     assert not g.verified_scenario_check(expect, list(reversed(tools)))
     result["combined"]["inputs"][0]["achieved_pct"] = 0
     assert not g.verified_scenario_check(expect, tools)
