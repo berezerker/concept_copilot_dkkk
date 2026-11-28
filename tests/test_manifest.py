@@ -1,6 +1,7 @@
 """Model Manifest: единый паспорт и детерминированное разрешение целей агента."""
 import os
 import sys
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -8,10 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.agent.prompts import system_prompt
 from app.agent.registry import TOOL_MAP
-from app.agent.tools_probe import _target
-from app.agent.tools_scenario import _scenario_input
+from app.agent.tools_probe import _target, resolve_input_selector
 from app.workbook.cell_trace import ref_for
 from app.workbook import manifest as mf
+from app.workbook import params as pr
 from tests.foreign_model import make_foreign_session
 
 
@@ -22,24 +23,47 @@ def call(s, name, args):
     return TOOL_MAP[name]["fn"](s, args, E)
 
 
+def test_parameter_search_can_keep_partial_alternatives():
+    common = {"kind": "input", "sheet": "Допущения", "factor": "rate"}
+    s = SimpleNamespace(sem={"rows": {
+        "Допущения!2": {**common, "row": 2, "label": "Эталонная средняя ставка"},
+        "Допущения!3": {**common, "row": 3, "label": "Средняя ставка"},
+    }})
+    query = "эталонная средняя ставка"
+    exact, _ = pr.search(s, query)
+    candidates, _ = pr.search(s, query, include_partial=True)
+    assert [p["row"] for p in exact] == [2]
+    assert [p["row"] for p in candidates] == [2, 3]
+
+
 def check_scenario_parameter(s):
     args = {"parameter": mf.parameter_id("База", 2), "source_period": "2026", "pct": -10}
-    _, detail = _scenario_input(s, args)
+    _, detail = resolve_input_selector(s, args)
     assert detail["source"] == "'База'!E2" and detail["parameter_id"] == args["parameter"]
-    _, by_row = _scenario_input(s, {"source": "'База'!2", "source_period": "2026", "pct": -10})
+    _, by_row = resolve_input_selector(s, {"source": "'База'!2", "source_period": "2026", "pct": -10})
     assert by_row["source"] == detail["source"]
     check = TestCase()
     with check.assertRaisesRegex(ValueError, "точный период входа"):
-        _scenario_input(s, {**args, "source_period": None})
+        resolve_input_selector(s, {**args, "source_period": None})
     with check.assertRaisesRegex(ValueError, "адрес входа или параметр"):
-        _scenario_input(s, {**args, "source": detail["source"]})
+        resolve_input_selector(s, {**args, "source": detail["source"]})
     with patch.object(s.idx.sheet("База"), "years_for", return_value={4: 2026, 5: 2026}):
         with check.assertRaisesRegex(ValueError, "нет единственной ячейки"):
-            _scenario_input(s, args)
+            resolve_input_selector(s, args)
     with patch.dict(s.idx.row("База", 2).formulas, {5: "=D2*1.03"}):
         with check.assertRaisesRegex(ValueError, "нет единственной ячейки"):
-            _scenario_input(s, args)
+            resolve_input_selector(s, args)
     output = {"metric": "metric:ebitda", "period": "2026"}
+    preview = call(s, "inspect_cell_stress", {**args, **output})
+    by_row_preview = call(s, "inspect_cell_stress", {
+        **output, "source": "'База'!2", "source_period": "2026", "pct": -10,
+    })
+    assert preview["source"] == by_row_preview["source"] == detail["source"]
+    assert preview["trace"] == by_row_preview["trace"]
+    assert preview["source_before"] == by_row_preview["source_before"]
+    with check.assertRaisesRegex(ValueError, "точный адрес A1 входа из плана"):
+        call(s, "run_cell_stress", {**args, **output, "file_hash": preview["file_hash"],
+                                   "expected_input": preview["source_before"]})
     node, entry = _target(s, output)
     ref = ref_for(node)
     assert _target(s, {**output, "target": ref}) == (node, entry)
@@ -120,5 +144,6 @@ def test_manifest():
 
 
 if __name__ == "__main__":
+    test_parameter_search_can_keep_partial_alternatives()
     test_manifest()
     print("manifest ok: единый паспорт, readiness и resolver")

@@ -1036,16 +1036,16 @@ def t_find_parameters(s, a, emit):
     """Реестр параметров модели: найти введённые числа (цены, курсы, коэффициенты, ставки…) по смыслу запроса."""
     from ..workbook import params as pr
     limit = int(a.get("limit", 20) or 20)
-    hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit)
+    hits, total = pr.search(s, a.get("query") or "", a.get("factor"), a.get("sheet"), limit, include_partial=True)
     out = [{"ref": h["ref"], "sheet": h["sheet"], "row": h["row"], "name": h["name"], "label": h["label"][:90], "block": h["block"][:90] or None,
             "unit": h["unit"] or None, "factor": h["factor"], "sub": h["sub"], "scalar": h["scalar"] or None, "values": h["values"],
             "influences": h["influences"] or None, "fanout": h["fanout"], "meaning": h["desc"] or None} for h in hits]
     payload = {"query": a.get("query") or "", "found": total, "parameters": out, "overview": pr.overview(s)}
     emit("params", payload)
     res = {"found": total, "parameters": out,
-           "note": "Шок параметра: {sheet, row, op, value} в run_stress (scalar — параметр одной ячейкой, шок меняет её). "
-                   "influences — на какие ключевые показатели параметр влияет по формулам (пусто — до них не доходит). "
-                   "Несколько похожих строк (по сегментам, продуктам) — уточни у пользователя или шокируй все и скажи об этом."}
+           "note": "Это список кандидатов. Для точного Excel-стресса передай ref строки и source_period. "
+                   "influences описывает связи по статической карте. При похожих строках сравни кандидатов "
+                   "отдельно или уточни нужную привязку. Для стресса всей выбранной строки доступен run_stress."}
     if not out:
         res["overview"] = pr.overview(s)
         res["note"] = ("По запросу ничего не найдено. Попробуй другие слова (в том числе по-английски, как в подписях модели), "
@@ -1124,7 +1124,7 @@ TOOLS = [
      "description": "Реестр параметров ЭТОЙ модели: все введённые числа, от которых что-то зависит (цены, курсы, коэффициенты, "
                     "ставки, нормативы — на любом листе, рядом по годам или одной ячейкой). Ищет по смыслу запроса в названии, "
                     "подписи, блоке, листе и факторе («цена бензина», «коэффициент загрузки», «ставка по кредиту»). "
-                    "ВСЕГДА вызывай перед шоком, если пользователь называет параметр словами. Без query — обзор реестра.",
+                    "Дополняет resolve_target, когда нужно посмотреть другие строки или их значения. Без query — обзор реестра.",
      "parameters": {"type": "object", "properties": {
          "query": {"type": "string", "description": "Что ищем, словами пользователя"},
          "factor": {"type": "string", "description": "Ограничить фактором или подфактором"},

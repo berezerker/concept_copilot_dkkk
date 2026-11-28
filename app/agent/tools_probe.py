@@ -67,6 +67,37 @@ def resolve_input(s, args):
                     "source_period": str(source_period) if source_period is not None else None}
 
 
+def resolve_input_selector(s, args):
+    source, parameter = args.get("source"), args.get("parameter")
+    if bool(source) == bool(parameter):
+        raise ValueError("Укажите точный адрес входа или параметр паспорта и период входа")
+    location = cells.row_reference(s.idx, source) if source else None
+    if source and not location:
+        return resolve_input(s, args)
+    if not args.get("source_period"):
+        raise ValueError("Для строки паспорта укажите точный период входа или выберите ячейку по адресу A1")
+    period = norm_period(args["source_period"])
+    parameter_id = None
+    if parameter:
+        from ..workbook import manifest
+
+        resolved = manifest.resolve(s, parameter, kind="parameter", intent="shock", limit=4)
+        if resolved["status"] != "resolved":
+            candidates = ", ".join(f"{item['location']['ref']} — {item['location']['label']}"
+                                   for item in resolved["candidates"])
+            detail = f" Возможные строки: {candidates}." if candidates else ""
+            raise ValueError(f"Уточните параметр «{parameter}» из паспорта или укажите адрес ячейки.{detail}")
+        selected = resolved["selected"]
+        loc = selected["location"]
+        location = (loc["sheet"], loc["row"])
+        parameter_id = selected["id"]
+    node = cells.cell_for_period(s.idx, location, period, input_only=True)
+    node, detail = resolve_input(s, {**args, "source": cells.ref_for(node)})
+    if parameter_id:
+        detail["parameter_id"] = parameter_id
+    return node, detail
+
+
 def proposed_value(a, pct):
     if not cells.numeric(a) or a == 0:
         raise ValueError("Нет ненулевой числовой базы для процентного шока драйвера")
@@ -86,12 +117,12 @@ def inspect_cell_stress(s, args, emit):
     """Без записи: адрес результата, цепочка и кандидаты либо точный план воздействия."""
     target, binding = _target(s, args)
     result = describe_target(s, target, binding)
-    if not args.get("source"):
+    if not (args.get("source") or args.get("parameter")):
         requested_period = args.get("source_period")
         source_period = norm_period(requested_period) if requested_period else None
         result["trace"] = cells.trace(s.idx, target, query=args.get("query") or "", source_period=source_period)
         return result
-    source, detail = resolve_input(s, args)
+    source, detail = resolve_input_selector(s, args)
     if source == target:
         raise ValueError("Драйвер должен отличаться от результата")
     require_excel(s)
@@ -108,6 +139,9 @@ def run_cell_stress(s, args, emit):
 
     if args.get("file_hash") != s.idx.file_hash:
         raise ValueError("Книга изменилась. Проверьте план сценария заново.")
+    source = args.get("source")
+    if not source or args.get("parameter") or cells.row_reference(s.idx, source):
+        raise ValueError("Для запуска передайте точный адрес A1 входа из плана")
     plan = inspect_cell_stress(s, args, emit)
     if ("source" not in plan or not cells.numeric(args.get("expected_input"))
             or args["expected_input"] != plan["source_before"]):
@@ -131,23 +165,28 @@ def run_cell_stress(s, args, emit):
 
 
 _TARGET = {
-    "target": {"type": "string", "description": "Точный адрес результата: лист!A1"},
+    "target": {"type": "string", "description": "Адрес результата лист!A1 либо строка лист!номер с period"},
     "metric": {"type": "string", "description": "ID показателя паспорта вместо target"},
     "period": {"type": "string", "description": "Точный период при выборе показателя"},
-    "source": {"type": "string", "description": "Точный адрес ячейки с введённым числом"},
+    "source": {"type": "string", "description": "Адрес входа лист!A1 либо строка лист!номер с source_period"},
     "pct": {"type": "number", "description": "Относительное изменение драйвера в процентах"},
     "query": {"type": "string", "description": "Фильтр кандидатов по фрагменту подписи"},
-    "source_period": {"type": "string", "description": "Фильтр кандидатов по точному периоду входа"},
+    "source_period": {"type": "string", "description": "Точный период входа. Обязателен для строки или параметра"},
 }
 TOOLS_PROBE = [
     {"name": "inspect_cell_stress", "fn": inspect_cell_stress,
-     "description": "Показать явные цепочки формул до ячейки результата. Без source возвращает кандидатов-допущения, "
-                    "с source и pct — план изменения одного конкретного входа и его базу. Excel не меняется.",
-     "parameters": {"type": "object", "properties": _TARGET}},
+     "description": "Показать цепочку формул и подготовить проверку одного входа без записи в Excel. "
+                    "Для известной строки передай source=лист!номер и source_period, инструмент сам найдёт ячейку. "
+                    "С pct возвращает точный план и базовые значения. Без source и parameter ищет кандидатов.",
+     "parameters": {"type": "object", "properties": {
+         **_TARGET, "parameter": {"type": "string", "description": "ID параметра паспорта вместо source"},
+     }}},
     {"name": "run_cell_stress", "fn": run_cell_stress,
      "description": "Выполнить проверенный план одного входа из inspect_cell_stress с точными source, target, pct, "
                     "file_hash и expected_input=source_before. Вернуть фактический шок, результат и подтверждение отката.",
-     "parameters": {"type": "object", "properties": {**_TARGET, "file_hash": {"type": "string"},
-                                                      "expected_input": {"type": "number"}},
+     "parameters": {"type": "object", "properties": {
+         **_TARGET, "source": {"type": "string", "description": "Точный адрес A1 входа из плана"},
+         "file_hash": {"type": "string"}, "expected_input": {"type": "number"},
+     },
                     "required": ["target", "source", "pct", "file_hash", "expected_input"]}},
 ]
