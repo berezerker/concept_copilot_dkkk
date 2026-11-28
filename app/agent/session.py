@@ -1,6 +1,7 @@
 """Сессия: одна загруженная модель, её индекс, движок пересчёта, карточка и история диалога."""
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import threading
@@ -29,6 +30,10 @@ class Session:
         self.results = []          # результаты стресс-прогонов (для выгрузки)
         self.scenario_plans = {}   # проверенные планы текущей загрузки
         self.verified_scenarios = {}  # результаты завершённых пересчётов текущей загрузки
+        self.credit_review_rows = None
+        self.credit_review_profiles = None
+        self.credit_review_decisions = {}
+        self.credit_covenant = None
         self.sem = None            # смысловой слой: паспорт строк и факторы (workbook/semantics.py)
         self.catalog = None        # справочник модели: показатели, где считаются, как шокируются (workbook/catalog.py)
         self.manifest = None       # единый паспорт модели для агента, UI и preflight
@@ -38,6 +43,10 @@ class Session:
     def load(self, src_path: str, filename: str, cache_dir: str, engine_kind: str | None, progress=None):
         self.scenario_plans.clear()
         self.verified_scenarios.clear()
+        self.credit_review_rows = None
+        self.credit_review_profiles = None
+        self.credit_review_decisions.clear()
+        self.credit_covenant = None
         self.engine_open = False
         self.engine_error = None
         dst = os.path.join(self.workdir, os.path.basename(filename))
@@ -123,7 +132,13 @@ class Session:
         копия, сохранённая Excel после первого открытия (с восстановлением), переиспользуется."""
         d = os.path.join(os.path.dirname(self.workdir), "excel")
         os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, self.idx.file_hash + os.path.splitext(dst)[1].lower())
+        from ..config import ROOT
+        # Excel для Mac идентифицирует открытые книги по имени. Разным рабочим каталогам
+        # нужны разные имена копий даже у одного исходника.
+        namespace = os.path.realpath(d)
+        default = os.path.realpath(os.path.join(ROOT, "workspace", "excel"))
+        suffix = "-" + hashlib.sha256(namespace.encode()).hexdigest()[:10] if namespace != default else ""
+        p = os.path.join(d, self.idx.file_hash + suffix + os.path.splitext(dst)[1].lower())
         if not os.path.exists(p):
             shutil.copyfile(dst, p)
         return p

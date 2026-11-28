@@ -33,6 +33,12 @@ def index():
     return FileResponse(os.path.join(STATIC, "index.html"), headers={"Cache-Control": "no-store"})
 
 
+@app.get("/credit-review.js")
+def credit_review_script():
+    return FileResponse(os.path.join(STATIC, "credit-review.js"), media_type="text/javascript",
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/version")
 def version():
     return {"version": APP_VERSION}
@@ -505,6 +511,141 @@ def model_manifest(session_id: str):
         return s.refresh_manifest() or mf.build(s)
 
 
+class CreditProfilesIn(BaseModel):
+    file_hash: str
+    profiles: list[str] | None = Field(max_length=16)
+
+
+class CreditCovenantIn(BaseModel):
+    file_hash: str
+    metric: str
+    sheet: str
+    row: int
+    threshold: float = Field(allow_inf_nan=False)
+    op: str
+    source: str = Field(min_length=1, max_length=240)
+    periods: list[str] = Field(min_length=1, max_length=180)
+
+
+class CreditApplicabilityIn(BaseModel):
+    file_hash: str
+    applies: bool | None
+    source: str = Field(default="", max_length=240)
+
+
+class CreditReconciliationIn(BaseModel):
+    file_hash: str
+    definition: str
+    period: str
+    refs: list[str] = Field(min_length=3, max_length=3)
+    sign: int
+    tolerance: float = Field(ge=0, allow_inf_nan=False)
+    source: str = Field(min_length=1, max_length=240)
+    comparable_basis: bool
+
+@app.get("/api/credit-review/{session_id}")
+def credit_review(session_id: str):
+    from .workbook.credit_review import inspect
+    s = _session(session_id)
+    with s.lock:
+        return inspect(s)
+
+
+@app.post("/api/credit-review/{session_id}/profiles")
+def credit_review_profiles(session_id: str, req: CreditProfilesIn):
+    from .workbook.credit_review import inspect, set_profiles
+    s = _session(session_id)
+    with s.lock:
+        if req.file_hash != s.idx.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте проверку заново.")
+        try:
+            set_profiles(s, req.profiles)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return inspect(s)
+
+
+@app.post("/api/credit-review/{session_id}/covenant")
+def credit_review_covenant(session_id: str, req: CreditCovenantIn):
+    from .workbook.credit_review import confirm_covenant
+    s = _session(session_id)
+    with s.lock:
+        if req.file_hash != s.idx.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте проверку заново.")
+        try:
+            return confirm_covenant(s, req.model_dump())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/credit-review/{session_id}/checks/{check_id}")
+def credit_review_applicability(session_id: str, check_id: str, req: CreditApplicabilityIn):
+    from .workbook.credit_review import inspect, set_applicability
+    s = _session(session_id)
+    with s.lock:
+        if req.file_hash != s.idx.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте проверку заново.")
+        try:
+            set_applicability(s, check_id, req.applies, req.source)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return inspect(s)
+
+@app.get("/api/credit-review/{session_id}/covenant")
+def credit_review_covenant_result(session_id: str, plan_id: str | None = None):
+    from .workbook.credit_review import covenant_result
+    s = _session(session_id)
+    with s.lock:
+        try:
+            return covenant_result(s, plan_id)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/credit-review/{session_id}/conclusion")
+def credit_review_conclusion(session_id: str, plan_id: str):
+    from .agent.tools_scenario import format_verified_excel_scenario
+    from .workbook.credit_review import covenant_result
+    s = _session(session_id)
+    with s.lock:
+        run = s.verified_scenarios.get(plan_id)
+        if not run or not run["rollback_verified"]:
+            raise HTTPException(404, "Подтверждённый расчёт для этой книги не найден.")
+        try:
+            covenant = covenant_result(s, plan_id)
+        except ValueError as exc:
+            covenant = {"status": "incomplete", "detail": str(exc)}
+        lines = ["# Черновик кредитного заключения", "", f"Модель: {s.card['file']}",
+                 f"Версия файла: {run['file_hash']}", f"Пересчёт: {run['verified_at']}", ""]
+        if covenant["status"] in ("breached", "met"):
+            rule = covenant["rule"]
+            lines += [f"Ковенант: {rule['name']} {rule['op']} {rule['threshold']:g}. {rule['source']}.",
+                      f"Строка: {rule['sheet']}!{rule['row']}. Периоды: {', '.join(rule['periods'])}."]
+            if breach := covenant["first_breach"]:
+                lines += [f"Первое нарушение: {breach['period']}. Значение: {breach['after']:.10g}."]
+            else:
+                lines += ["Ковенант соблюдён в выбранных периодах сценария."]
+            gap = covenant["minimum_headroom"]
+            lines += [f"Минимальный запас: {gap['headroom']:.10g} ({gap['period']}).", ""]
+        else:
+            lines += [covenant.get("detail", "Статус ковенанта требует подтверждения условий сделки."), ""]
+        lines += [format_verified_excel_scenario(run)]
+        return {"markdown": "\n".join(lines), "covenant": covenant, "run": run}
+
+
+@app.post("/api/credit-review/{session_id}/reconcile")
+def credit_review_reconcile(session_id: str, req: CreditReconciliationIn):
+    from .workbook.credit_review import reconcile
+    s = _session(session_id)
+    with s.lock:
+        if req.file_hash != s.idx.file_hash:
+            raise HTTPException(409, "Книга изменилась. Откройте проверку заново.")
+        try:
+            return reconcile(s, req.model_dump())
+        except (ValueError, KeyError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/manifest/{session_id}/parameters/{parameter_id}")
 def model_parameter(session_id: str, parameter_id: str):
     from .workbook.cell_trace import numeric, period_at, ref_for
@@ -600,7 +741,14 @@ def confirm_binding(session_id: str, req: BindingIn):
         return {"binding": result, "manifest": summary(s.manifest), "card": s.card}
 
 
-class CellStressIn(BaseModel):
+class InputChangeIn(BaseModel):
+    pct: float | None = Field(default=None, allow_inf_nan=False)
+    op: str | None = None
+    value: float | None = Field(default=None, allow_inf_nan=False)
+    percent_scale: str | None = None
+
+
+class CellStressIn(InputChangeIn):
     target: str | None = None
     metric: str | None = None
     period: str | None = None
@@ -608,7 +756,6 @@ class CellStressIn(BaseModel):
     query: str | None = None
     source: str | None = None
     parameter: str | None = None
-    pct: float | None = None
     file_hash: str | None = None
     expected_input: float | None = None
     run: bool = False
@@ -632,11 +779,10 @@ def cell_stress(session_id: str, req: CellStressIn):
             raise HTTPException(400, str(exc)) from exc
 
 
-class ScenarioShockIn(BaseModel):
+class ScenarioShockIn(InputChangeIn):
     source: str | None = None
     parameter: str | None = None
     source_period: str | None = None
-    pct: float
 
 
 class ScenarioMetricIn(BaseModel):

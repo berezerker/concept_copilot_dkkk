@@ -13,7 +13,9 @@ def _target(s, args):
     if node is None and (not requested_period or not (row_ref or metric)):
         raise ValueError("Укажите адрес A1 либо точный period вместе с показателем или строкой из паспорта")
     period = norm_period(requested_period) if requested_period else None
-    if node is not None and period is not None and cells.period_at(s.idx, node) != period:
+    if requested_period and period is None:
+        raise ValueError("Укажите распознаваемый период результата")
+    if node is not None and period is not None and str(cells.period_at(s.idx, node)) != str(period):
         raise ValueError(f"{ref}: адрес результата не соответствует периоду {requested_period}")
 
     location = node[:2] if node else row_ref
@@ -56,13 +58,25 @@ def resolve_input(s, args):
         raise ValueError("Драйвер должен быть отдельной ячейкой с введённым числом")
     if source[0] in s.idx.inactive:
         raise ValueError("Драйвер находится в неактивном наборе допущений")
-    pct = args.get("pct")
-    if not cells.numeric(pct) or pct == 0:
-        raise ValueError("Укажите ненулевое конечное изменение в процентах")
+    operation = args.get("op") or "pct"
+    value = args.get("value")
+    if args.get("pct") is not None:
+        if operation != "pct" or value is not None:
+            raise ValueError("Передайте либо pct, либо одну операцию с value")
+        value = args["pct"]
+    if operation not in ("pct", "pp", "set") or not cells.numeric(value) or (operation != "set" and value == 0):
+        raise ValueError("Укажите конечное изменение в процентах или п.п. либо новое значение")
+    scale = args.get("percent_scale")
+    if operation == "pp" and scale not in ("fraction", "percent"):
+        raise ValueError("Уточните, как ставка хранится в Excel: доля (0,12) или проценты (12)")
     source_period = cells.period_at(s.idx, source)
-    if args.get("source_period") and norm_period(args["source_period"]) != source_period:
-        raise ValueError("Выбранная ячейка не соответствует указанному периоду входа")
-    return source, {"source": cells.ref_for(source), "source_label": ri.label, "source_unit": ri.unit, "requested_pct": pct,
+    if args.get("source_period"):
+        period = norm_period(args["source_period"])
+        if period is None or str(period) != str(source_period):
+            raise ValueError("Выбранная ячейка не соответствует указанному периоду входа")
+    return source, {"source": cells.ref_for(source), "source_label": ri.label, "source_unit": ri.unit,
+                    "operation": operation, "requested_change": value, "percent_scale": scale,
+                    "requested_pct": value if operation == "pct" else None,
                     "source_period": str(source_period) if source_period is not None else None}
 
 
@@ -104,6 +118,26 @@ def proposed_value(a, pct):
     return proposed
 
 
+def apply_input_change(before, detail):
+    if detail["operation"] == "pct":
+        return proposed_value(before, detail["requested_pct"])
+    value = detail["requested_change"]
+    proposed = value if detail["operation"] == "set" else before + value / (
+        100 if detail["percent_scale"] == "fraction" else 1)
+    if not cells.numeric(proposed) or not cells.numeric(proposed - before) or proposed == before:
+        raise ValueError("Шок не задаёт нового конечного числового значения")
+    return proposed
+
+
+def input_effect(before, after, detail):
+    delta = after - before
+    percent = (after / before - 1) * 100 if before else None
+    return {"achieved_pct": percent if cells.numeric(percent) else None,
+            "achieved_delta": delta,
+            "achieved_pp": delta * (100 if detail["percent_scale"] == "fraction" else 1)
+            if detail["operation"] == "pp" else None}
+
+
 def require_excel(s):
     s.require_engine()
     if s.engine.name != "excel":
@@ -135,9 +169,9 @@ def inspect_cell_stress(s, args, emit):
         raise ValueError("Драйвер должен отличаться от результата")
     require_excel(s)
     a, b = (block[0][0] for block in s.engine.read([detail["source"], result["target"]]))
-    if not cells.numeric(b):
-        raise ValueError("Нет числовой базы для результата")
-    result.update(detail, source_before=a, source_proposed=proposed_value(a, detail["requested_pct"]),
+    if not cells.numeric(a) or not cells.numeric(b):
+        raise ValueError("Нет числовой базы для входа или результата")
+    result.update(detail, source_before=a, source_proposed=apply_input_change(a, detail),
                   target_before=b, trace=cells.trace(s.idx, target, source))
     return result
 
@@ -165,19 +199,27 @@ def run_cell_stress(s, args, emit):
     if not same_values(s.engine.read(refs), [[[plan["source_before"]]], [[plan["target_before"]]]]):
         raise RuntimeError("База между подготовкой и откатом изменилась. Повторите проверку плана.")
     after_input, after_target = (block[0][0] for block in values)
-    plan.update(source_after=after_input, achieved_pct=(after_input / plan["source_before"] - 1) * 100,
+    plan.update(input_effect(plan["source_before"], after_input, plan),
+                source_after=after_input,
                 target_after=after_target, target_delta=after_target - plan["target_before"],
                 rollback_verified=True, iterations=iters)
     emit("cell_stress", plan)
     return plan
 
 
+INPUT_CHANGE_PROPERTIES = {
+    "pct": {"type": "number", "description": "Относительное изменение в процентах"},
+    "op": {"type": "string", "enum": ["pct", "pp", "set"], "description": "Операция при передаче value"},
+    "value": {"type": "number", "description": "Изменение в процентах или п.п. либо новое значение для set"},
+    "percent_scale": {"type": "string", "enum": ["fraction", "percent"],
+                      "description": "Для pp: ставка хранится долей (0,12) или процентами (12)"},
+}
 _TARGET = {
     "target": {"type": "string", "description": "Адрес результата лист!A1 либо строка лист!номер с period"},
     "metric": {"type": "string", "description": "ID показателя паспорта вместо target"},
     "period": {"type": "string", "description": "Точный период при выборе показателя"},
     "source": {"type": "string", "description": "Адрес входа лист!A1 либо строка лист!номер с source_period"},
-    "pct": {"type": "number", "description": "Относительное изменение драйвера в процентах"},
+    **INPUT_CHANGE_PROPERTIES,
     "query": {"type": "string", "description": "Фильтр кандидатов по фрагменту подписи"},
     "source_period": {"type": "string", "description": "Точный период входа. Обязателен для строки или параметра"},
 }
@@ -185,16 +227,17 @@ TOOLS_PROBE = [
     {"name": "inspect_cell_stress", "fn": inspect_cell_stress,
      "description": "Показать цепочку формул и подготовить проверку одного входа без записи в Excel. "
                     "Для известной строки передай source=лист!номер и source_period, инструмент сам найдёт ячейку. "
-                    "С pct возвращает точный план и базовые значения. Без source и parameter ищет кандидатов.",
+                    "С pct либо op и value возвращает план и базовые значения. Без source и parameter ищет кандидатов.",
      "parameters": {"type": "object", "properties": {
          **_TARGET, "parameter": {"type": "string", "description": "ID параметра паспорта вместо source"},
      }}},
     {"name": "run_cell_stress", "fn": run_cell_stress,
-     "description": "Выполнить проверенный план одного входа из inspect_cell_stress с точными source, target, pct, "
+     "description": "Выполнить проверенный план одного входа из inspect_cell_stress с точными source, target, параметрами изменения, "
                     "file_hash и expected_input=source_before. Вернуть фактический шок, результат и подтверждение отката.",
      "parameters": {"type": "object", "properties": {
          **_TARGET, "source": {"type": "string", "description": "Точный адрес A1 входа из плана"},
          "file_hash": {"type": "string"}, "expected_input": {"type": "number"},
      },
-                    "required": ["target", "source", "pct", "file_hash", "expected_input"]}},
+                    "required": ["target", "source", "file_hash", "expected_input"],
+                    "anyOf": [{"required": ["pct"]}, {"required": ["op", "value"]}]}},
 ]

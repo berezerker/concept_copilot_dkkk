@@ -463,19 +463,26 @@ class ExcelEngine(CalcEngine):
             pass
         errors = []
         name = os.path.basename(path)
+        expected = os.path.realpath(path)
+
+        def matches(book):
+            return book.name == name and os.path.realpath(book.fullname) == expected
 
         def wait_book(nm, timeout=180):
             t0 = time.time()
             while time.time() - t0 < timeout:
                 for b in self.app.books:
-                    if b.name == nm or b.name.startswith(os.path.splitext(nm)[0]):
+                    if matches(b):
                         return b
                 time.sleep(0.5)
             raise RuntimeError(f"книга {nm} не появилась в Excel за {timeout} с (не нажат запрос доступа?)")
 
         for b in self.app.books:                        # уже открыта (повторная загрузка / переподключение)
-            if b.name == name:
+            if matches(b):
                 return b
+            if b.name == name:
+                raise RuntimeError("В Excel открыта одноимённая книга по другому пути. "
+                                   "Для расчёта нужна рабочая копия текущей загрузки.")
         # Сначала через LaunchServices (как двойной клик в Finder): Excel получает доступ к файлу от системы
         # и НЕ показывает «Предоставить доступ». AppleScript-открытие (books.open) — только запасной путь.
         try:
@@ -484,7 +491,10 @@ class ExcelEngine(CalcEngine):
         except Exception as e:
             errors.append(f"open -a: {type(e).__name__}: {e}")
         try:
-            return self.app.books.open(path)
+            book = self.app.books.open(path)
+            if not matches(book):
+                raise RuntimeError("Открытая книга Excel не совпадает с рабочей копией")
+            return book
         except Exception as e:
             errors.append(f"xlwings open: {type(e).__name__}: {e}")
         raise RuntimeError("Excel не смог открыть файл. Если в Excel был запрос доступа или восстановления — "

@@ -64,7 +64,7 @@ def cell_for_period(idx, location, period, *, input_only=False):
     info = idx.row(sheet, row)
     matching = []
     for col, value in sh.years_for(row).items():
-        if value != period:
+        if str(value) != str(period):
             continue
         if col in info.formulas:
             if not input_only:

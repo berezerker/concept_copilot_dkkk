@@ -5,7 +5,8 @@ from uuid import uuid4
 
 from ..workbook import cell_trace as cells
 from ..workbook.transaction import same_values, validate_overrides
-from .tools_probe import _target, describe_target, proposed_value, require_excel, resolve_input_selector
+from .tools_probe import (INPUT_CHANGE_PROPERTIES, _target, apply_input_change, describe_target,
+                          input_effect, require_excel, resolve_input_selector)
 
 
 LIMIT = 8
@@ -45,7 +46,7 @@ def prepare_excel_scenario(s, args, emit):
     for node, detail in inputs:
         ref = detail["source"]
         before = baseline[ref][0][0]
-        proposed = proposed_value(before, detail["requested_pct"])
+        proposed = apply_input_change(before, detail)
         paths = [{"target": out["target"], **cells.trace(s.idx, target, node)}
                  for (target, _), out in zip(resolved, outputs)]
         if not reason and not any(path["status"] == "found" for path in paths):
@@ -91,7 +92,7 @@ def execute_excel_scenario(s, args, emit):
             raise RuntimeError("Фактические изменения входов отличаются от проверенного плана")
         return {
             "inputs": [{"ref": item["source"], "after": actual[item["source"]][0][0],
-                        "achieved_pct": (actual[item["source"]][0][0] / item["before"] - 1) * 100}
+                        **input_effect(item["before"], actual[item["source"]][0][0], item)}
                        for item in plan["inputs"] if item["source"] in applied],
             "metrics": [{"ref": m["target"], "after": actual[m["target"]][0][0],
                          "delta": actual[m["target"]][0][0] - m["before"]} for m in plan["metrics"]],
@@ -177,8 +178,14 @@ def format_verified_excel_scenario(result):
     for observed in result["combined"]["inputs"]:
         item = inputs[observed["ref"]]
         name = label(item["source_label"], observed["ref"])
+        if item.get("operation") == "pp":
+            shock = f"{observed['achieved_pp']:+.10g} п.п."
+        elif item.get("operation") == "set":
+            shock = f"{observed['achieved_delta']:+.10g} в единицах входа"
+        else:
+            shock = f"{observed['achieved_pct']:+.10g}%"
         lines.append(f"| {name} | {item['source_period'] or '—'} | {item['before']:.10g} | "
-                     f"{observed['after']:.10g} | {observed['achieved_pct']:+.10g}% |")
+                     f"{observed['after']:.10g} | {shock} |")
     if result["individual"]:
         lines += ["", "| Допущение | Период входа | Показатель | Период результата | Изменение от отдельного шока |",
                   "| --- | --- | --- | --- | ---: |"]
@@ -204,8 +211,8 @@ TOOLS_SCENARIO = [
              "source": {"type": "string", "description": "Адрес лист!A1 либо строка лист!номер с source_period"},
              "parameter": {"type": "string", "description": "ID или имя параметра паспорта вместо source"},
              "source_period": {"type": "string", "description": "Точный период входа, обязателен с parameter"},
-             "pct": {"type": "number", "description": "Относительный шок в процентах, не процентных пунктах"},
-         }, "required": ["pct"]}},
+             **INPUT_CHANGE_PROPERTIES,
+         }, "anyOf": [{"required": ["pct"]}, {"required": ["op", "value"]}]}},
          "metrics": {"type": "array", "description": "По одному объекту на каждый результат и период. "
                                                      'Например, {"metric":"metric:dscr","period":"2026"} '
                                                      'или {"target":"Лист!34","period":"2026"}.',

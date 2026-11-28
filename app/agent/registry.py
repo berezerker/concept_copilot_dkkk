@@ -2,6 +2,7 @@ from .tools_ext import TOOLS_EXT
 from .tools_credit import TOOLS_CREDIT
 from .tools_expert import EXPERT_TOOL
 from .tools_probe import TOOLS_PROBE
+from .tools_review import TOOLS_REVIEW
 from .tools_scenario import TOOLS_SCENARIO
 from .tools_semantic import TOOLS_SEMANTIC
 
@@ -20,7 +21,8 @@ def _with_catalog(fn):
 
 
 ALL_TOOLS = [dict(t, fn=_with_catalog(t["fn"]))
-             for t in TOOLS + TOOLS_EXT + TOOLS_CREDIT + TOOLS_SEMANTIC + TOOLS_PROBE + TOOLS_SCENARIO + [EXPERT_TOOL]]
+             for t in TOOLS + TOOLS_EXT + TOOLS_CREDIT + TOOLS_SEMANTIC + TOOLS_PROBE
+             + TOOLS_SCENARIO + TOOLS_REVIEW + [EXPERT_TOOL]]
 TOOL_MAP = {t["name"]: t for t in ALL_TOOLS}
 
 

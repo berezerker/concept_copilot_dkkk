@@ -52,6 +52,12 @@ def main(argv=None):
     data = json.dumps({"meta": meta, "recs": recs}, ensure_ascii=False).replace("</", "<\\/")
     shim = open(os.path.join(ROOT, "tools", "demo_shim.js"), encoding="utf-8").read()
     html = open(os.path.join(ROOT, "static", "index.html"), encoding="utf-8").read()
+    script = '<script src="/credit-review.js"></script>'
+    if script in html and any(r["path"].startswith("/api/credit-review/") for r in recs):
+        workflow = open(os.path.join(ROOT, "static", "credit-review.js"), encoding="utf-8").read()
+        html = html.replace(script, f"<script>\n{workflow}\n</script>", 1)
+    else:
+        html = html.replace(script, "", 1)
     inject = f"<script>window.__DEMO__={data};</script>\n<script>{shim}</script>\n"
     html = re.sub(r"(<head[^>]*>)", lambda m: m.group(1) + "\n" + inject, html, count=1)
     html = re.sub(r"<title>(.*?)</title>", r"<title>\1 · демо</title>", html, count=1)

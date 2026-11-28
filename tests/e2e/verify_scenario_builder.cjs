@@ -29,6 +29,8 @@ async function main() {
     await explorer.getByRole('button',{name:'Добавить в стресс'}).click();
     assert.ok(await page.locator('.scenario-builder [data-field=source]').first().inputValue());
     await explorer.getByRole('button',{name:'Закрыть обзор'}).click();
+    const scenarios = page.locator('.credit-workbench').getByRole('button',{name:'Сценарии',exact:true});
+    if(await scenarios.count()) await scenarios.click();
     await page.getByRole('button',{name:'Открыть совместный стресс', exact:true}).click();
     const form = page.locator('.scenario-builder');
     const preview = form.getByRole('button',{name:'Проверить план'});

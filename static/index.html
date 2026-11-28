@@ -12,6 +12,7 @@
     --mono:'SF Mono','Consolas','Menlo',monospace;
   }
   *{margin:0;padding:0;box-sizing:border-box}
+  [hidden]{display:none!important}
   html,body{height:100%}
   body{font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:13.5px}
   .app{display:flex;flex-direction:column;height:100vh}
@@ -27,6 +28,30 @@
   .chatcol{flex:1;display:flex;flex-direction:column;min-width:0}
   .chat-wrap{flex:1;overflow-y:auto;padding:16px 22px}
   .chat{max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+  .credit-workbench{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-wrap:anywhere}
+  .credit-workbench .review-heading{padding:16px 18px 9px}
+  .credit-workbench nav{display:flex;flex-wrap:wrap;gap:4px 14px;padding:0 18px;border-bottom:1px solid var(--border)}
+  .credit-workbench nav button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 2px}
+  .credit-workbench nav button[aria-current="step"]{border-bottom-color:var(--blue);color:var(--blue);font-weight:700}
+  .credit-workbench section[data-stage]{padding:16px 18px}
+  .credit-workbench :is(h3,h4){margin:0 0 6px}
+  .credit-workbench :is(p,ul,.scenario-actions,details,fieldset){margin:8px 0}
+  .credit-workbench ul{padding-inline-start:20px}
+  .credit-workbench .review-finding{padding:9px 0;border-top:1px solid var(--border)}
+  .credit-workbench .review-warning{background:#fff4df;color:#763f05;border-radius:7px;padding:8px 10px}
+  .credit-workbench .review-primary{background:var(--blue);color:white;border-color:var(--blue)}
+  .credit-workbench label{display:block;margin:6px 0}
+  .credit-workbench :is(select,input){max-width:100%}
+  .credit-workbench fieldset{border:1px solid var(--border);border-radius:8px;padding:8px;min-width:0}
+  .credit-workbench .review-periods{display:flex;gap:3px 14px;flex-wrap:wrap}
+  .credit-workbench .scenario-builder{margin:10px 0 0;box-shadow:none}
+  .advanced-tools{margin-top:12px}
+  .agent-settings{position:relative}
+  .agent-settings summary{padding:5px 8px}
+  .agent-settings .settings-body{position:absolute;right:0;z-index:5;min-width:220px;background:var(--card);color:var(--text);
+    padding:12px;border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 16px #192c411a}
+  .agent-settings .settings-body :is(label,input,select){max-width:100%;margin:3px 0}
+  .run-details{padding:6px 0}
   .drop{border:2px dashed #c5d3e8;border-radius:12px;padding:18px;text-align:center;cursor:pointer;background:#f8fbff;transition:all .15s}
   .drop:hover,.drop.over{border-color:var(--blue);background:#eef5ff}
   .drop b{display:block;margin-bottom:4px}
@@ -199,9 +224,11 @@
     <h1>Копилот ДККК · агент CashFlow</h1>
     <span class="badge" id="eng">движок: —</span>
     <span class="sp"></span>
-    <label>Модель LLM <select id="provider"></select></label>
-    <input type="text" id="model" placeholder="имя модели">
-    <label title="Агент сначала строит план и отмечает шаги" id="planLbl"><input type="checkbox" id="plan" checked> план</label>
+    <details class="agent-settings"><summary>Настройки агента</summary><div class="settings-body">
+      <label>Модель LLM <select id="provider"></select></label>
+      <input type="text" id="model" aria-label="Имя модели" placeholder="имя модели">
+      <label title="Агент сначала строит план и отмечает шаги" id="planLbl"><input type="checkbox" id="plan" checked> план</label>
+    </div></details>
     <span class="busy" id="busy" onclick="toggleLog(true)" title="Открыть журнал расчётов"><i></i><span id="busyText">свободно</span></span>
     <button class="btn-demo" id="btnStop" onclick="stopRun()" style="display:none">⏹ Остановить</button>
     <button class="btn-demo" id="btnLog" onclick="toggleLog()">📜 Журнал</button>
@@ -213,23 +240,23 @@
       <input type="file" id="file" accept=".xlsx,.xlsm" hidden>
       <div style="display:flex;gap:6px;margin-top:8px"><input type="text" id="lpath" placeholder="или путь: ~/Documents/модель.xlsx" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:12px">
         <button class="btn" onclick="uploadPath($('#lpath').value.trim())" title="Открыть файл с этого компьютера по пути">Открыть</button></div>
-      <div class="toolbar" id="toolbar">
+      <details class="advanced-tools"><summary>Дополнительные инструменты</summary><div class="toolbar" id="toolbar">
         <button class="btn" id="btnMap" onclick="direct('map')" disabled>🗺 Карта модели</button>
         <button class="btn" id="btnAudit" onclick="direct('audit')" disabled>🔍 Предпроверка</button>
         <button class="btn" id="btnParams" onclick="direct('params')" disabled title="Все числа модели, которые можно менять: цены, курсы, коэффициенты, ставки">📒 Параметры</button>
         <button class="btn" id="btnDeps" onclick="direct('deps')" disabled title="От чего зависят ключевые метрики — по экономическим факторам">🧭 Факторы</button>
         <button class="btn accent2" id="btnExpert" onclick="openExpert()" disabled>🧑‍🏭 Отраслевой эксперт: новость → стресс</button>
         <button class="btn accent" id="btnKpki" onclick="openKpki()" disabled>📑 Заключение для КПКИ (Word)</button>
-      </div>
-      <div id="card"></div>
+      </div></details>
+      <details class="advanced-tools"><summary>Справочные данные книги</summary><div id="card"></div></details>
     </aside>
     <div class="chatcol">
       <div class="chat-wrap" id="wrap"><div class="chat" id="chat">
-        <div class="sys">Загрузите модель слева. Агент построит её каркас (экспресс-анализ), а затем будет искать нужные листы и строки, прогонять стресс-сценарии и подбирать значения по вашему запросу.</div>
+        <div class="sys" id="startHint">Загрузите книгу Excel. Копилот покажет, что найдено в прогнозе и что стоит проверить первым.</div>
       </div></div>
       <div class="input-bar">
         <div class="input-inner">
-          <textarea id="q" rows="1" placeholder="Например: стресс Urals −10% и −20% — что будет с Net Debt / EBITDA и DSCR?"></textarea>
+          <textarea id="q" rows="1" placeholder="Спросите о модели или опишите сценарий своими словами"></textarea>
           <button class="send" id="send" disabled>Отправить</button>
         </div>
       </div>
@@ -244,6 +271,7 @@
   <div class="log-list" id="logList"></div>
 </div>
 
+<script src="/credit-review.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const chat = $('#chat'), wrap = $('#wrap');
@@ -311,6 +339,7 @@ async function afterUpload(r, box){
     const d = await r.json();
     if(!r.ok) throw new Error(d.detail || r.statusText);
     SID = d.session_id; workbookView++; box.remove();
+    $('#startHint')?.remove();
     for(const panel of document.querySelectorAll('.scenario-builder,.model-explorer,.model-intro')) panel.remove();
     $('#eng').textContent = 'движок: ' + (d.engine || 'нет — только чтение');
     renderCard(d);
@@ -561,10 +590,16 @@ const scenarioNumber = x => typeof x==='number'
   ? x.toLocaleString('ru-RU',{maximumSignificantDigits:9})
   : '—';
 
+function scenarioChange(detail, observed){
+  if(detail.operation==='set') return observed ? 'Δ '+scenarioNumber(observed.achieved_delta) : 'Новое значение';
+  if(detail.operation==='pp') return scenarioNumber(observed ? observed.achieved_pp : detail.requested_change)+' п.п.';
+  return scenarioNumber(observed ? observed.achieved_pct : detail.requested_pct)+' %';
+}
+
 function scenarioPreview(data){
   const inputs=data.inputs.map(x=>`<tr><td>${esc(x.source_label)}<br><code>${esc(x.source)}</code></td>
     <td>${esc(x.source_period||'—')}</td><td class="n">${scenarioNumber(x.before)} → ${scenarioNumber(x.proposed)} ${esc(x.source_unit||'')}</td>
-    <td class="n">${scenarioNumber(x.requested_pct)} %</td></tr>`).join('');
+    <td class="n">${scenarioChange(x)}</td></tr>`).join('');
   const outputs=data.metrics.map(x=>`<tr><td>${esc(x.target_label)}<br><code>${esc(x.target)}</code>
     ${x.binding_confirmed===false?'<small>Привязка предложена паспортом</small>':''}</td>
     <td>${esc(x.period||'—')}</td><td class="n">${scenarioNumber(x.before)} ${esc(x.target_unit||'')}</td></tr>`).join('');
@@ -597,7 +632,7 @@ function scenarioOutcome(data){
     return row(esc(labels.get(ref))+'<br><code>'+esc(ref)+'</code>', item);
   }).join('');
   const applied=data.combined.inputs.map(x=>`<li><code>${esc(x.ref)}</code> → ${scenarioNumber(x.after)}
-    (${scenarioNumber(x.achieved_pct)} %)</li>`).join('');
+    (${scenarioChange(data.inputs.find(item=>item.source===x.ref),x)})</li>`).join('');
   return `<div class="scenario-results"><h3>Результаты Excel</h3>
     <p class="kv">${data.historical?'Сохранённый результат. Текущая база не сверялась. ':''}
       ${data.rollback_verified?'Откат подтверждён после каждого пересчёта.':''}</p>
@@ -609,6 +644,7 @@ function scenarioOutcome(data){
 }
 
 function showModelIntro(d){
+  if(typeof showCreditReview==='function') return showCreditReview(d);
   const m=d.manifest;
   const suggestions=m.suggested_parameters||[];
   const box=add(el(`<section class="chart model-intro">
@@ -838,6 +874,8 @@ async function openModelExplorer(parameterId){
 async function openScenarioBuilder(seed={}){
   if(!SID || running) return;
   const sid=SID, view=workbookView;
+  const review=$('.credit-workbench');
+  review?.showStage('scenarios');
   const existing=$('.scenario-builder');
   if(existing){
     existing.addScenarioSeed?.(seed);
@@ -857,7 +895,7 @@ async function openScenarioBuilder(seed={}){
       <button type="button" class="btn" data-run disabled>Пересчитать в Excel</button>
     </div>
     <p class="kv" role="status">Загружаю показатели паспорта…</p>
-    <div data-plan></div><div data-result></div></form>`));
+    <div data-plan></div><div data-result></div></form>`), review?.querySelector('[data-scenario-container]') || chat);
   const find=s=>form.querySelector(s);
   const outputs=find('[data-outputs]'), inputs=find('[data-inputs]');
   const status=find('[role=status]'), preview=find('[data-plan]'), result=find('[data-result]');
@@ -920,7 +958,12 @@ async function openScenarioBuilder(seed={}){
     if(inputs.children.length>=8) return null;
     const row=el(`<div class="scenario-row">
       <label>Адрес входа <input data-field="source" placeholder="Лист!A1" required></label>
-      <label>Шок, % <input data-field="pct" type="number" step="any" value="-10" required></label>
+      <label>Изменить вход <select data-field="op"><option value="pct">На проценты</option>
+        <option value="pp">На процентные пункты</option><option value="set">Задать значение</option></select></label>
+      <label><span data-shock-label>Изменение, %</span> <input data-field="pct" type="number" step="any" value="-10" required></label>
+      <label data-scale hidden>Ставка хранится как <select data-field="percent-scale" disabled>
+        <option value="">Выберите формат Excel</option><option value="fraction">Доля, например 0,12</option>
+        <option value="percent">Проценты, например 12</option></select></label>
       <label>Период входа <input data-field="period" placeholder="Любой"></label>
       <button type="button" class="btn" data-remove>Убрать вход</button>
       <div class="scenario-candidates scenario-row">
@@ -931,6 +974,12 @@ async function openScenarioBuilder(seed={}){
       </div></div>`);
     const candidateBox=row.querySelector('[data-candidates]');
     const search=row.querySelector('[data-find]');
+    field(row,'op').onchange=()=>{
+      const op=value(row,'op'), scale=field(row,'percent-scale');
+      row.querySelector('[data-scale]').hidden=op!=='pp';
+      scale.disabled=op!=='pp'; scale.required=op==='pp';
+      row.querySelector('[data-shock-label]').textContent={pct:'Изменение, %',pp:'Изменение, п.п.',set:'Новое значение'}[op];
+    };
     search.onclick=async()=>{
       if(!current() || running || busy || search.disabled) return;
       const out=outputs.children[Number(value(row,'for-result'))];
@@ -982,11 +1031,21 @@ async function openScenarioBuilder(seed={}){
       field(row,'source').value=data.source;
       field(row,'period').value=data.period||'';
     }
+    if(data.targets?.length){
+      if(data.targets.length>8){ status.textContent='Для одного прогона выберите до восьми результатов.'; return; }
+      outputs.replaceChildren();
+      for(const ref of data.targets){
+        const row=addOutput();
+        field(row,'target').value=ref;
+      }
+    }
     if(data.metric){
       const row=[...outputs.children].find(r=>!value(r,'target') && !value(r,'metric')) || addOutput();
       if(!row){ status.textContent='В сценарии уже восемь результатов.'; return; }
       field(row,'metric').value=data.metric;
       field(row,'metric').onchange();
+      const period=field(row,'period');
+      if([...period.options].some(option=>option.value===data.resultPeriod)) period.value=data.resultPeriod;
     }
     targetOptions(); invalidate();
   };
@@ -1010,8 +1069,11 @@ async function openScenarioBuilder(seed={}){
     try{
       const data=await workbookRequest(base+'/prepare',{
         metrics:Array.from(outputs.children,target),
-        shocks:Array.from(inputs.children,row=>({source:value(row,'source'),
-          source_period:value(row,'period'),pct:Number(value(row,'pct'))})),
+        shocks:Array.from(inputs.children,row=>({
+          source:value(row,'source'), source_period:value(row,'period'),
+          ...(value(row,'op')==='pct' ? {pct:Number(value(row,'pct'))}
+            : {op:value(row,'op'),value:Number(value(row,'pct')),percent_scale:value(row,'percent-scale')||null})
+        })),
         experiment_reason:form.elements.experiment.value.trim()
       });
       if(!current()) return;
@@ -1037,6 +1099,7 @@ async function openScenarioBuilder(seed={}){
       if(!current()) return;
       result.innerHTML=scenarioOutcome(data);
       status.textContent='Пересчёт завершён.';
+      review?.scenarioComplete(data.plan_id);
       result.scrollIntoView({block:'nearest'});
     }catch(e){ if(current()){ status.textContent=e.message; preview.replaceChildren(); } }
     finally{
@@ -1149,9 +1212,9 @@ async function streamInto(url, payload, ctx){
         if(ev && data) handle(ev, JSON.parse(data), ctx);
       }
     }
-  }catch(e){ add(el(`<div class="err-box">${esc(e.message)}</div>`), ctx.body); }
+  }catch(e){ ctx.failed=true; add(el(`<div class="err-box">${esc(e.message)}</div>`), ctx.body); }
   const secs=((Date.now()-ctx.t0)/1000).toFixed(1);
-  ctx.head.innerHTML=`<span style="color:var(--green)">✓</span><span>Готово</span><span class="meta">${ctx.n} вызовов инструментов · ${secs} с</span>`;
+  ctx.head.innerHTML=`<span>${ctx.failed?'Требует внимания':'Готово'}</span><span class="meta">${ctx.n} вызовов инструментов · ${secs} с</span>`;
 }
 const llm = () => ({provider:$('#provider').value, model:$('#model').value.trim()||null});
 
@@ -1161,12 +1224,17 @@ async function send(){
   running=true; $('#send').disabled=true; q.value=''; q.style.height='auto';
   add(el(`<div class="msg-user">${esc(text)}</div>`));
   const ctx = newRun('Агент работает');
+  ctx.compact = true;
   await streamInto('/api/chat', {session_id:SID, message:text, plan_mode:$('#plan').checked, ...llm()}, ctx);
   running=false; $('#send').disabled=false; chipsRender();
 }
 
 function handle(ev, d, ctx){
-  const body=ctx.body;
+  const primary = ['status','plan','progress','tool_end','semantics','manifest','card','answer','error'];
+  if(ctx.compact && !primary.includes(ev) && !ctx.details){
+    ctx.details=add(el('<details class="run-details"><summary>Ход работы и расчёты</summary><div></div></details>'),ctx.body);
+  }
+  const body=ctx.compact && ctx.details && !primary.includes(ev) ? ctx.details.lastElementChild : ctx.body;
   if(ev==='status'){ ctx.meta.textContent=d.text; }
   else if(ev==='plan'){ renderPlan(d, ctx); }
   else if(ev==='think'){ add(el(`<div class="think">✦ ${esc(d.text)}</div>`), body); }
@@ -1182,6 +1250,9 @@ function handle(ev, d, ctx){
   }
   else if(ev==='tool_end'){
     const card=ctx.tools[d.id]; if(!card) return;
+    if(d.ok && d.name==='execute_excel_scenario' && d.result?.rollback_verified){
+      $('.credit-workbench')?.scenarioComplete(d.result.plan_id);
+    }
     if(ctx.prog){ ctx.prog.remove(); ctx.prog=null; }
     card.querySelector('.st').innerHTML = d.ok ? `<span style="color:var(--green)">✓</span> ${d.seconds} с` : `<span style="color:var(--red)">✗ ошибка</span>`;
     if(!d.ok) card.classList.add('err');
@@ -1213,6 +1284,7 @@ function handle(ev, d, ctx){
   else if(ev==='catalog'){ renderCatalog(d, body); }
   else if(ev==='params'){ renderParams(d, body); }
   else if(ev==='answer'){
+    if(d.complete===false) ctx.failed=true;
     const a=add(el(`<div class="answer">${md(d.text)}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><a class="btn" data-k="docx" href="#">⬇ Word (.docx)</a><a class="btn" data-k="md" href="#">⬇ Markdown (.md)</a></div></div>`), body);
     const fname = d.report ? 'Заключение_КПКИ' : 'Копилот_ответ';
     a.querySelector('[data-k=md]').onclick=e=>{ e.preventDefault(); saveBlob(new Blob([d.text],{type:'text/markdown'}), fname+'.md'); };
@@ -1220,7 +1292,7 @@ function handle(ev, d, ctx){
       const r=await fetch('/api/docx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markdown:d.text,filename:fname+'.docx'})});
       if(r.ok) saveBlob(await r.blob(), fname+'.docx'); };
   }
-  else if(ev==='error'){ add(el(`<div class="err-box">⚠ ${esc(d.text)}</div>`), body); }
+  else if(ev==='error'){ ctx.failed=true; add(el(`<div class="err-box">⚠ ${esc(d.text)}</div>`), body); }
 }
 
 function renderPlan(p, ctx){
@@ -1601,6 +1673,11 @@ const TOUR=[
 ];
 let tourI=-1, tourEls=null;
 function tourStart(){
+  if(typeof showCreditReview==='function'){
+    const guide=modal('Как работать с моделью', '<ol style="padding-left:20px"><li>Загрузите Excel и посмотрите, что найдено в прогнозе.</li><li>В проверке подтвердите существенные допущения и условия ковенанта.</li><li>Проверьте план сценария и запустите Excel.</li><li>Откройте вывод и сохраните черновик.</li></ol><p>Вопрос о модели можно задать на любом шаге.</p>', 'Понятно', ()=>{});
+    guide.querySelector('[data-k=cancel]').hidden=true;
+    return;
+  }
   const m=el(`<div class="modal-bg" style="z-index:1003"><div class="modal" style="max-width:900px"><div class="modal-h"><h2>Копилот ДККК · путь кредитного аналитика</h2><button class="x">×</button></div>
     <div class="modal-b"><div style="font-size:13px;color:#4d5866;line-height:1.6">От загрузки модели клиента до заключения для КПКИ — за минуты, с адресами ячеек и пересчётом в Excel. Нажмите на этап или пройдите тур.</div>
     <div class="cjm">${CJM.map((c,i)=>`<div class="st" data-i="${i}"><div class="ic">${c[0]}</div><b>${c[1]}</b><span>${c[2]}</span></div>`).join('')}</div></div>
@@ -1652,7 +1729,7 @@ function tourPlace(){
   else { left=Math.max(12, R.l-pw-12); top=Math.max(12, Math.min(vh-ph-12, R.t)); }
   pop.style.left=Math.max(12, Math.min(vw-pw-12, left))+'px'; pop.style.top=Math.max(12, Math.min(vh-ph-12, top))+'px';
 }
-try{ if(!localStorage.getItem('cf_tour_seen')){ localStorage.setItem('cf_tour_seen','1'); setTimeout(tourStart, 600); } }catch(e){}
+try{ if(typeof showCreditReview!=='function' && !localStorage.getItem('cf_tour_seen')){ localStorage.setItem('cf_tour_seen','1'); setTimeout(tourStart, 600); } }catch(e){}
 
 /* ── журнал расчётов и индикатор занятости ── */
 const SRC={engine:'пересчёт',llm:'LLM',tool:'инстр.',progress:'шаг',status:'статус',error:'ошибка',op:'задача',app:'app'};
